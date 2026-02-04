@@ -9,3 +9,4 @@ server/sales_platform.db
 client/.env
 server/.env
 .vscode
+server/credentials.json

@@ -131,6 +131,30 @@ app.post('/api/sequence', (req, res) => {
     }
 });
 
+
+// --- DEEP RESEARCH API (Perplexity) ---
+const researchService = require('./services/researchService');
+
+app.post('/api/research/company', async (req, res) => {
+    const { company, domain } = req.body;
+    try {
+        const summary = await researchService.researchCompany(company, domain);
+        res.json({ success: true, summary });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/research/lead', async (req, res) => {
+    const { name, company } = req.body;
+    try {
+        const summary = await researchService.researchPerson(name, company);
+        res.json({ success: true, summary });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // --- CONVERSATION MEMORY API ---
 
 const conversationMemory = require('./services/conversationMemory');

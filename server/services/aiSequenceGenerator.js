@@ -234,6 +234,7 @@ async function draftContextualReply(leadId, incomingMessage, channel = 'EMAIL') 
         const { generateContextPrompt } = require('./conversationMemory');
         const { getExtractedDetails } = require('./detailExtractor');
         const { db } = require('../db');
+        const researchService = require('./researchService');
 
         const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
         if (!lead) throw new Error('Lead not found');
@@ -241,12 +242,28 @@ async function draftContextualReply(leadId, incomingMessage, channel = 'EMAIL') 
         const fullContext = generateContextPrompt(leadId);
         const details = getExtractedDetails(leadId);
 
+        // --- NEW: Perform Deep Research if enabled ---
+        let researchContext = '';
+        if (process.env.PERPLEXITY_API_KEY && lead.company) {
+            try {
+                console.log(`[AI Research] researching ${lead.company}...`);
+                const companyResearch = await researchService.researchCompany(lead.company, lead.website);
+                if (companyResearch) {
+                    researchContext = `\nREAL-TIME COMPANY RESEARCH:\n${companyResearch}\n`;
+                }
+            } catch (resErr) {
+                console.warn('[AI Research] failed:', resErr.message);
+            }
+        }
+
         const prompt = `You are responding to a customer message. Be helpful, reference their question, and guide toward a call.
 
 THEIR MESSAGE:
 "${incomingMessage}"
 
 ${fullContext}
+
+${researchContext}
 
 KNOWN DETAILS:
 ${JSON.stringify(details, null, 2)}
