@@ -2,9 +2,14 @@ const OpenAI = require('openai');
 const fs = require('fs');
 const path = require('path');
 
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
-});
+// Lazy-load OpenAI client (initialized on first use, not at module load)
+let _openaiClient = null;
+function getOpenAI() {
+    if (!_openaiClient) {
+        _openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    }
+    return _openaiClient;
+}
 
 const SEQUENCE_FILE = path.join(__dirname, '../sequence.json');
 
@@ -62,7 +67,7 @@ Ensure all messages are personalized with {{firstName}}, {{company}}, or {{indus
 Return ONLY the JSON array, no explanations.`;
 
     try {
-        const response = await openai.chat.completions.create({
+        const response = await getOpenAI().chat.completions.create({
             model: 'gpt-4o',
             messages: [
                 { role: 'system', content: 'You are a sales sequence generator. Return only valid JSON.' },
@@ -126,7 +131,7 @@ Return JSON with:
 }`;
 
     try {
-        const response = await openai.chat.completions.create({
+        const response = await getOpenAI().chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [
                 { role: 'system', content: 'You are a sales strategist. Return only valid JSON.' },
@@ -206,7 +211,7 @@ ${context ? `ADDITIONAL CONTEXT: ${context}` : ''}
 Return ONLY the message text. ${channel === 'EMAIL' ? 'Start with "Subject: " on first line.' : ''}`;
 
     try {
-        const response = await openai.chat.completions.create({
+        const response = await getOpenAI().chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [
                 { role: 'system', content: 'You are a skilled sales copywriter who writes like a real person, not a bot. You reference previous conversations naturally.' },
@@ -277,7 +282,7 @@ REQUIREMENTS:
 
 Write the response now:`;
 
-        const response = await openai.chat.completions.create({
+        const response = await getOpenAI().chat.completions.create({
             model: 'gpt-4o',
             messages: [
                 { role: 'system', content: 'You are a helpful sales representative having a real conversation. Be natural, not salesy.' },
@@ -334,7 +339,7 @@ REQUIREMENTS:
 
 Return ONLY the adapted message:`;
 
-        const response = await openai.chat.completions.create({
+        const response = await getOpenAI().chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [
                 { role: 'system', content: 'You adapt sales templates to be contextual. Keep the essence but personalize.' },

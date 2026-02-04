@@ -1,8 +1,10 @@
 const OpenAI = require('openai');
 
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-});
+let _openai = null;
+function getOpenAI() {
+    if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    return _openai;
+}
 
 /**
  * Generate a smart reply based on conversation history
@@ -41,7 +43,7 @@ Lead Name: ${leadName || 'Local Business Owner'}
             ...history
         ];
 
-        const completion = await openai.chat.completions.create({
+        const completion = await getOpenAI().chat.completions.create({
             messages: messages,
             model: 'gpt-4o-mini',
             max_tokens: 150,
