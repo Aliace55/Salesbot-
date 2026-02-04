@@ -1,0 +1,85 @@
+[
+  {
+    "id": 1,
+    "type": "SMS",
+    "delayDays": 0,
+    "variants": [
+      {
+        "name": "A",
+        "content": "Hey {{firstName}}, {{sms_hook}} - Alex @ TrackMyTruck"
+      },
+      {
+        "name": "B",
+        "content": "Hi {{firstName}}, quick Q: are you tracking your fleet vehicles yet? - Alex"
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "type": "EMAIL",
+    "delayDays": 1,
+    "subject": "{{email_subject}}",
+    "condition": {
+      "if": {
+        "previous_step_replied": false
+      },
+      "else": "skip"
+    },
+    "variants": [
+      {
+        "name": "A",
+        "content": "Hi {{firstName}},\n\n{{email_body}}\n\nWorth a 5-min chat?\n\n- Alex"
+      },
+      {
+        "name": "B",
+        "content": "{{firstName}},\n\nSaw your company might need fleet visibility.\n\nWe help businesses like yours save 20%+ on fuel and overtime.\n\nCan I send over a quick demo?\n\n- Alex"
+      }
+    ]
+  },
+  {
+    "id": 3,
+    "type": "CALL",
+    "delayDays": 2,
+    "condition": {
+      "if": {
+        "email_opened": true
+      },
+      "else": "skip_to_4"
+    },
+    "description": "Call main line. Ask for Fleet Manager."
+  },
+  {
+    "id": 4,
+    "type": "LINKEDIN",
+    "delayDays": 3,
+    "subtype": "CONNECTION",
+    "description": "Send Connection (Note): Helping fleets in {{city}} reduce costs."
+  },
+  {
+    "id": 5,
+    "type": "EMAIL",
+    "delayDays": 2,
+    "subject": "Following up",
+    "condition": {
+      "if": {
+        "no_response_after_steps": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    "content": "Hi {{firstName}},\n\nJust wanted to circle back - is fleet tracking on your radar?\n\nHappy to share some case studies if helpful.\n\n- Alex"
+  },
+  {
+    "id": 6,
+    "type": "SMS",
+    "delayDays": 3,
+    "condition": {
+      "if": {
+        "interested": true
+      }
+    },
+    "content": "Great to hear you're interested, {{firstName}}! When works for a quick call? I'm flexible this week."
+  }
+]

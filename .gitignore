@@ -1,0 +1,11 @@
+node_modules
+.env
+dist
+build
+.DS_Store
+*.log
+sales_platform.db
+server/sales_platform.db
+client/.env
+server/.env
+.vscode
