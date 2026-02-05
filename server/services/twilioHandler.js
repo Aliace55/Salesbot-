@@ -1,5 +1,5 @@
 const twilio = require('twilio');
-const { db } = require('../db');
+const { query } = require('../db');
 
 const getClient = () => {
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -41,25 +41,26 @@ async function sendSMS(to, body) {
  * Handle incoming webhook from Twilio
  * @param {object} body - Twilio webhook body (From, Body)
  */
-function handleIncomingMessage(body) {
+async function handleIncomingMessage(body) {
     const from = body.From; // E.164
     const content = body.Body;
 
     console.log(`Received SMS from ${from}: ${content}`);
 
     // 1. Find the lead
-    const lead = db.prepare('SELECT * FROM leads WHERE phone = ?').get(from);
+    const result = await query('SELECT * FROM leads WHERE phone = $1', [from]);
+    const lead = result.rows[0];
 
     if (lead) {
         // 2. STOP AUTOMATION
-        db.prepare("UPDATE leads SET status = 'MANUAL_INTERVENTION' WHERE id = ?").run(lead.id);
+        await query("UPDATE leads SET status = 'MANUAL_INTERVENTION' WHERE id = $1", [lead.id]);
         console.log(`Stopped automation for lead ${lead.id} (${lead.name})`);
 
         // 3. Log Message
-        db.prepare(`
+        await query(`
             INSERT INTO messages (lead_id, type, direction, content)
-            VALUES (?, 'SMS', 'INBOUND', ?)
-        `).run(lead.id, content);
+            VALUES ($1, 'SMS', 'INBOUND', $2)
+        `, [lead.id, content]);
     } else {
         console.log('Received SMS from unknown number:', from);
     }
@@ -96,16 +97,16 @@ async function initiateCall(to, leadId, repPhone = null) {
         console.log(`Call initiated to ${to}: ${call.sid}`);
 
         // Log the call attempt
-        db.prepare(`
+        await query(`
             INSERT INTO messages (lead_id, type, direction, content)
-            VALUES (?, 'CALL', 'OUTBOUND', ?)
-        `).run(leadId, `Call initiated: ${call.sid}`);
+            VALUES ($1, 'CALL', 'OUTBOUND', $2)
+        `, [leadId, `Call initiated: ${call.sid}`]);
 
         // Log event
-        db.prepare(`
-            INSERT INTO events (lead_id, type, meta)
-            VALUES (?, 'CALL_INITIATED', ?)
-        `).run(leadId, JSON.stringify({ callSid: call.sid, to }));
+        await query(`
+            INSERT INTO events (lead_id, type, metadata)
+            VALUES ($1, 'CALL_INITIATED', $2)
+        `, [leadId, JSON.stringify({ callSid: call.sid, to })]);
 
         return { success: true, callSid: call.sid };
     } catch (error) {
@@ -118,22 +119,23 @@ async function initiateCall(to, leadId, repPhone = null) {
  * Handle Twilio Voice status callback
  * @param {object} body - Twilio status webhook body
  */
-function handleCallStatus(body) {
+async function handleCallStatus(body) {
     const { CallSid, CallStatus, To, Duration } = body;
     console.log(`Call ${CallSid} status: ${CallStatus}`);
 
     // Find the lead by phone
-    const lead = db.prepare('SELECT * FROM leads WHERE phone = ?').get(To);
+    const result = await query('SELECT * FROM leads WHERE phone = $1', [To]);
+    const lead = result.rows[0];
 
     if (lead && CallStatus === 'completed') {
         // Log call completion
-        db.prepare(`
-            INSERT INTO events (lead_id, type, meta)
-            VALUES (?, 'CALL_COMPLETED', ?)
-        `).run(lead.id, JSON.stringify({ callSid: CallSid, duration: Duration }));
+        await query(`
+            INSERT INTO events (lead_id, type, metadata)
+            VALUES ($1, 'CALL_COMPLETED', $2)
+        `, [lead.id, JSON.stringify({ callSid: CallSid, duration: Duration })]);
 
         // Update last contacted
-        db.prepare(`UPDATE leads SET last_contacted_at = CURRENT_TIMESTAMP WHERE id = ?`).run(lead.id);
+        await query(`UPDATE leads SET last_contacted_at = CURRENT_TIMESTAMP WHERE id = $1`, [lead.id]);
     }
 }
 
@@ -154,10 +156,10 @@ async function sendRinglessVoicemail(to, audioUrl, leadId) {
     console.log(`[Placeholder] Ringless VM to ${to} with audio: ${audioUrl}`);
 
     // Log the attempt
-    db.prepare(`
+    await query(`
         INSERT INTO messages (lead_id, type, direction, content)
-        VALUES (?, 'VOICEMAIL', 'OUTBOUND', ?)
-    `).run(leadId, `Ringless VM: ${audioUrl}`);
+        VALUES ($1, 'VOICEMAIL', 'OUTBOUND', $2)
+    `, [leadId, `Ringless VM: ${audioUrl}`]);
 
     return { success: true, provider: 'placeholder' };
 }

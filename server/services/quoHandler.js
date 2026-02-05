@@ -5,7 +5,7 @@
  */
 
 const fetch = require('node-fetch');
-const { db } = require('../db');
+const { query } = require('../db');
 
 const QUO_API_BASE = 'https://api.openphone.com/v1';
 
@@ -71,18 +71,19 @@ async function handleIncomingMessage(body) {
     console.log(`[Quo] Received SMS from ${from}: ${content}`);
 
     // Find the lead
-    const lead = db.prepare('SELECT * FROM leads WHERE phone = ?').get(from);
+    const result = await query('SELECT * FROM leads WHERE phone = $1', [from]);
+    const lead = result.rows[0];
 
     if (lead) {
         // Stop automation - human responded
-        db.prepare("UPDATE leads SET status = 'MANUAL_INTERVENTION' WHERE id = ?").run(lead.id);
+        await query("UPDATE leads SET status = 'MANUAL_INTERVENTION' WHERE id = $1", [lead.id]);
         console.log(`[Quo] Stopped automation for lead ${lead.id} (${lead.name})`);
 
         // Log the message
-        db.prepare(`
+        await query(`
             INSERT INTO messages (lead_id, type, direction, content)
-            VALUES (?, 'SMS', 'INBOUND', ?)
-        `).run(lead.id, content);
+            VALUES ($1, 'SMS', 'INBOUND', $2)
+        `, [lead.id, content]);
 
         // EXTRACT DETAILS FROM MESSAGE (Conversational Memory)
         try {
@@ -94,7 +95,7 @@ async function handleIncomingMessage(body) {
         }
 
         // Update preferred channel
-        db.prepare(`UPDATE leads SET preferred_channel = 'SMS' WHERE id = ?`).run(lead.id);
+        await query("UPDATE leads SET preferred_channel = 'SMS' WHERE id = $1", [lead.id]);
     } else {
         console.log('[Quo] Received SMS from unknown number:', from);
     }

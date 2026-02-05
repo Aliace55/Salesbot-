@@ -5,7 +5,7 @@
  */
 
 const fetch = require('node-fetch');
-const { db } = require('../db');
+const { query } = require('../db');
 
 const DROP_COWBOY_API = 'https://api.dropcowboy.com/v1';
 
@@ -88,13 +88,13 @@ async function sendRinglessVoicemail(to, options, leadId) {
         console.log(`[Drop Cowboy] Ringless VM queued for ${to}: ${data.id || 'OK'}`);
 
         // Log to database
-        db.prepare(`
+        await query(`
             INSERT INTO messages (lead_id, type, direction, content)
-            VALUES (?, 'VOICEMAIL', 'OUTBOUND', ?)
-        `).run(leadId, `Ringless VM (Drop Cowboy): "${(options.ttsBody || options.message || 'Pre-recorded').substring(0, 100)}..."`);
+            VALUES ($1, 'VOICEMAIL', 'OUTBOUND', $2)
+        `, [leadId, `Ringless VM (Drop Cowboy): "${(options.ttsBody || options.message || 'Pre-recorded').substring(0, 100)}..."`]);
 
         // Update lead
-        db.prepare(`UPDATE leads SET last_contacted_at = CURRENT_TIMESTAMP WHERE id = ?`).run(leadId);
+        await query(`UPDATE leads SET last_contacted_at = CURRENT_TIMESTAMP WHERE id = $1`, [leadId]);
 
         return { success: true, messageId: data.id, status: 'queued' };
 
@@ -108,7 +108,7 @@ async function sendRinglessVoicemail(to, options, leadId) {
  * Handle Drop Cowboy webhook for delivery status
  * Configure in Drop Cowboy dashboard
  */
-function handleWebhook(body) {
+async function handleWebhook(body) {
     const { event, phone_number, foreign_id, status, error } = body;
 
     console.log(`[Drop Cowboy Webhook] ${event}: ${phone_number} - ${status || error}`);
@@ -119,16 +119,16 @@ function handleWebhook(body) {
 
     if (leadId) {
         // Log event
-        db.prepare(`
+        await query(`
             INSERT INTO events (lead_id, type, metadata)
-            VALUES (?, 'RVM_STATUS', ?)
-        `).run(leadId, JSON.stringify({
+            VALUES ($1, 'RVM_STATUS', $2)
+        `, [leadId, JSON.stringify({
             event,
             status,
             error,
             phone_number,
             timestamp: new Date().toISOString()
-        }));
+        })]);
 
         // Handle specific events
         if (event === 'delivered' || status === 'delivered') {
@@ -138,7 +138,7 @@ function handleWebhook(body) {
             console.log(`[Drop Cowboy] VM bounced for lead ${leadId}`);
         } else if (event === 'optout' || event === 'opt-out') {
             // Mark lead as opted out
-            db.prepare(`UPDATE leads SET status = 'OPTED_OUT' WHERE id = ?`).run(leadId);
+            await query(`UPDATE leads SET status = 'OPTED_OUT' WHERE id = $1`, [leadId]);
             console.log(`[Drop Cowboy] Lead ${leadId} opted out`);
         }
     }

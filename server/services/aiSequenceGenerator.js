@@ -156,6 +156,7 @@ Return JSON with:
  * @param {string} context - Additional context (previous messages, etc.)
  * @returns {Promise<string>}
  */
+
 async function autoDraftMessage(lead, channel, context = '') {
     const charLimits = {
         SMS: 160,
@@ -169,13 +170,14 @@ async function autoDraftMessage(lead, channel, context = '') {
 
     try {
         const { generateContextPrompt, buildContextForAI } = require('./conversationMemory');
-        const { getExtractedDetails } = require('./detailExtractor');
+        // detailExtractor is not directly used here but loaded in memory?
+        // const { getExtractedDetails } = require('./detailExtractor');
 
         const leadId = lead.id || lead;
-        const contextData = buildContextForAI(leadId);
+        const contextData = await buildContextForAI(leadId);
 
         if (contextData) {
-            fullContext = generateContextPrompt(leadId);
+            fullContext = await generateContextPrompt(leadId);
             extractedDetails = contextData.extractedDetails || {};
         }
     } catch (err) {
@@ -238,14 +240,15 @@ async function draftContextualReply(leadId, incomingMessage, channel = 'EMAIL') 
     try {
         const { generateContextPrompt } = require('./conversationMemory');
         const { getExtractedDetails } = require('./detailExtractor');
-        const { db } = require('../db');
+        const { query } = require('../db');
         const researchService = require('./researchService');
 
-        const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
+        const leadRes = await query('SELECT * FROM leads WHERE id = $1', [leadId]);
+        const lead = leadRes.rows[0];
         if (!lead) throw new Error('Lead not found');
 
-        const fullContext = generateContextPrompt(leadId);
-        const details = getExtractedDetails(leadId);
+        const fullContext = await generateContextPrompt(leadId);
+        const details = await getExtractedDetails(leadId);
 
         // --- NEW: Perform Deep Research if enabled ---
         let researchContext = '';
@@ -314,14 +317,14 @@ async function adaptSequenceMessage(templateContent, leadId, channel) {
     try {
         const { generateContextPrompt, buildContextForAI } = require('./conversationMemory');
 
-        const context = buildContextForAI(leadId);
+        const context = await buildContextForAI(leadId);
 
         // If no context/replies, just use template with variable replacement
         if (!context || !context.hasReplied) {
             return { adapted: false, content: templateContent };
         }
 
-        const fullContext = generateContextPrompt(leadId);
+        const fullContext = await generateContextPrompt(leadId);
 
         const prompt = `Adapt this sales template to be contextual based on previous conversations.
 

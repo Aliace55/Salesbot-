@@ -3,35 +3,36 @@
  * Generates CSV and PDF exports of analytics data
  */
 
-const { db } = require('../db');
+const { query } = require('../db');
 
 /**
  * Export leads to CSV format
  * @param {object} filters - Optional filters
  * @returns {string} CSV content
  */
-function exportLeadsCSV(filters = {}) {
-    let query = 'SELECT * FROM leads';
+async function exportLeadsCSV(filters = {}) {
+    let sql = 'SELECT * FROM leads';
     const conditions = [];
     const params = [];
 
     if (filters.status) {
-        conditions.push('status = ?');
         params.push(filters.status);
+        conditions.push(`status = $${params.length}`);
     }
 
     if (filters.campaign) {
-        conditions.push('campaign = ?');
         params.push(filters.campaign);
+        conditions.push(`campaign = $${params.length}`);
     }
 
     if (conditions.length > 0) {
-        query += ' WHERE ' + conditions.join(' AND ');
+        sql += ' WHERE ' + conditions.join(' AND ');
     }
 
-    query += ' ORDER BY created_at DESC';
+    sql += ' ORDER BY created_at DESC';
 
-    const leads = db.prepare(query).all(...params);
+    const res = await query(sql, params);
+    const leads = res.rows;
 
     // Generate CSV header
     const headers = ['ID', 'Name', 'Phone', 'Email', 'Product Interest', 'Source', 'Campaign', 'Status', 'Step', 'Last Contacted', 'Created'];
@@ -56,8 +57,8 @@ function exportLeadsCSV(filters = {}) {
 /**
  * Export messages/activity to CSV
  */
-function exportMessagesCSV(leadId = null) {
-    let query = `
+async function exportMessagesCSV(leadId = null) {
+    let sql = `
         SELECT m.*, l.name as lead_name, l.email as lead_email
         FROM messages m
         LEFT JOIN leads l ON m.lead_id = l.id
@@ -65,13 +66,14 @@ function exportMessagesCSV(leadId = null) {
 
     const params = [];
     if (leadId) {
-        query += ' WHERE m.lead_id = ?';
         params.push(leadId);
+        sql += ` WHERE m.lead_id = $${params.length}`;
     }
 
-    query += ' ORDER BY m.created_at DESC';
+    sql += ' ORDER BY m.created_at DESC';
 
-    const messages = db.prepare(query).all(...params);
+    const res = await query(sql, params);
+    const messages = res.rows;
 
     const headers = ['ID', 'Lead Name', 'Lead Email', 'Type', 'Direction', 'Content', 'Variant', 'Classification', 'Created'];
 
@@ -93,19 +95,36 @@ function exportMessagesCSV(leadId = null) {
 /**
  * Export analytics summary to CSV
  */
-function exportAnalyticsCSV() {
-    const totalLeads = db.prepare('SELECT COUNT(*) as count FROM leads').get().count;
-    const activeLeads = db.prepare("SELECT COUNT(*) as count FROM leads WHERE status = 'ACTIVE'").get().count;
-    const totalSent = db.prepare("SELECT COUNT(*) as count FROM messages WHERE direction = 'OUTBOUND'").get().count;
-    const totalReplies = db.prepare("SELECT COUNT(*) as count FROM messages WHERE direction = 'INBOUND'").get().count;
+async function exportAnalyticsCSV() {
+    const [totalLeadsRes, activeLeadsRes, totalSentRes, totalRepliesRes] = await Promise.all([
+        query('SELECT COUNT(*) as count FROM leads'),
+        query("SELECT COUNT(*) as count FROM leads WHERE status = 'ACTIVE'"),
+        query("SELECT COUNT(*) as count FROM messages WHERE direction = 'OUTBOUND'"),
+        query("SELECT COUNT(*) as count FROM messages WHERE direction = 'INBOUND'")
+    ]);
+
+    const totalLeads = parseInt(totalLeadsRes.rows[0].count);
+    const activeLeads = parseInt(activeLeadsRes.rows[0].count);
+    const totalSent = parseInt(totalSentRes.rows[0].count);
+    const totalReplies = parseInt(totalRepliesRes.rows[0].count);
 
     // Channel breakdown
     const channels = ['SMS', 'EMAIL', 'CALL', 'LINKEDIN'];
-    const channelStats = channels.map(ch => {
-        const sent = db.prepare(`SELECT COUNT(*) as count FROM messages WHERE type = ? AND direction = 'OUTBOUND'`).get(ch).count;
-        const replies = db.prepare(`SELECT COUNT(*) as count FROM messages WHERE type = ? AND direction = 'INBOUND'`).get(ch).count;
-        return { channel: ch, sent, replies };
+
+    // Parallelize channel stats queries
+    const channelStatsPromises = channels.map(async (ch) => {
+        const [sentRes, repliesRes] = await Promise.all([
+            query("SELECT COUNT(*) as count FROM messages WHERE type = $1 AND direction = 'OUTBOUND'", [ch]),
+            query("SELECT COUNT(*) as count FROM messages WHERE type = $1 AND direction = 'INBOUND'", [ch])
+        ]);
+        return {
+            channel: ch,
+            sent: parseInt(sentRes.rows[0].count),
+            replies: parseInt(repliesRes.rows[0].count)
+        };
     });
+
+    const channelStats = await Promise.all(channelStatsPromises);
 
     let csv = 'SUMMARY REPORT\n';
     csv += `Generated,${new Date().toISOString()}\n\n`;
@@ -128,8 +147,8 @@ function exportAnalyticsCSV() {
 /**
  * Export tasks to CSV
  */
-function exportTasksCSV(status = null) {
-    let query = `
+async function exportTasksCSV(status = null) {
+    let sql = `
         SELECT t.*, l.name as lead_name, l.email as lead_email
         FROM tasks t
         LEFT JOIN leads l ON t.lead_id = l.id
@@ -137,13 +156,14 @@ function exportTasksCSV(status = null) {
 
     const params = [];
     if (status) {
-        query += ' WHERE t.status = ?';
         params.push(status);
+        sql += ` WHERE t.status = $${params.length}`;
     }
 
-    query += ' ORDER BY t.due_date ASC';
+    sql += ' ORDER BY t.due_date ASC';
 
-    const tasks = db.prepare(query).all(...params);
+    const res = await query(sql, params);
+    const tasks = res.rows;
 
     const headers = ['ID', 'Lead Name', 'Lead Email', 'Type', 'Title', 'Description', 'Due Date', 'Status', 'Completed At'];
 
@@ -165,39 +185,39 @@ function exportTasksCSV(status = null) {
 /**
  * Generate a performance report object (for JSON or rendering)
  */
-function generatePerformanceReport(dateRange = 7) {
+async function generatePerformanceReport(dateRange = 7) {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - dateRange);
     const startStr = startDate.toISOString();
 
     // Daily activity
-    const dailyActivity = db.prepare(`
-        SELECT date(created_at) as date, 
+    const dailyActivityRes = await query(`
+        SELECT created_at::date as date, 
                COUNT(*) as total,
                SUM(CASE WHEN direction = 'OUTBOUND' THEN 1 ELSE 0 END) as sent,
                SUM(CASE WHEN direction = 'INBOUND' THEN 1 ELSE 0 END) as received
         FROM messages
-        WHERE created_at >= ?
-        GROUP BY date(created_at)
+        WHERE created_at >= $1
+        GROUP BY created_at::date
         ORDER BY date ASC
-    `).all(startStr);
+    `, [startStr]);
 
     // Top performing channels
-    const channelPerformance = db.prepare(`
+    const channelPerformanceRes = await query(`
         SELECT type,
                COUNT(*) as total,
                SUM(CASE WHEN direction = 'INBOUND' THEN 1 ELSE 0 END) as replies
         FROM messages
-        WHERE created_at >= ?
+        WHERE created_at >= $1
         GROUP BY type
         ORDER BY replies DESC
-    `).all(startStr);
+    `, [startStr]);
 
     return {
         dateRange,
         generatedAt: new Date().toISOString(),
-        dailyActivity,
-        channelPerformance
+        dailyActivity: dailyActivityRes.rows,
+        channelPerformance: channelPerformanceRes.rows
     };
 }
 

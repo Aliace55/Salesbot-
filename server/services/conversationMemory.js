@@ -3,16 +3,21 @@
  * Provides full conversation context for AI-powered personalization
  */
 
-const { db } = require('../db');
+/**
+ * Conversation Memory Service
+ * Provides full conversation context for AI-powered personalization
+ */
+
+const { query } = require('../db');
 
 /**
  * Get full conversation history for a lead across all channels
  * @param {number} leadId 
- * @returns {Array} Messages in chronological order
+ * @returns {Promise<Array>} Messages in chronological order
  */
-function getFullConversationHistory(leadId) {
+async function getFullConversationHistory(leadId) {
     try {
-        const messages = db.prepare(`
+        const result = await query(`
             SELECT 
                 id,
                 type,
@@ -20,11 +25,11 @@ function getFullConversationHistory(leadId) {
                 content,
                 created_at as timestamp
             FROM messages 
-            WHERE lead_id = ?
+            WHERE lead_id = $1
             ORDER BY created_at ASC
-        `).all(leadId);
+        `, [leadId]);
 
-        return messages.map(msg => ({
+        return result.rows.map(msg => ({
             ...msg,
             channel: msg.type, // EMAIL, SMS, CALL, VOICEMAIL
             isInbound: msg.direction === 'INBOUND'
@@ -40,15 +45,17 @@ function getFullConversationHistory(leadId) {
  * @param {number} leadId 
  * @param {number} limit - Number of messages to return
  */
-function getRecentMessages(leadId, limit = 5) {
+async function getRecentMessages(leadId, limit = 5) {
     try {
-        return db.prepare(`
+        const result = await query(`
             SELECT type, direction, content, created_at as timestamp
             FROM messages 
-            WHERE lead_id = ?
+            WHERE lead_id = $1
             ORDER BY created_at DESC
-            LIMIT ?
-        `).all(leadId, limit).reverse(); // Reverse to get chronological order
+            LIMIT $2
+        `, [leadId, limit]);
+
+        return result.rows.reverse(); // Reverse to get chronological order
     } catch (err) {
         console.error('[ConversationMemory] Error getting recent messages:', err.message);
         return [];
@@ -59,19 +66,19 @@ function getRecentMessages(leadId, limit = 5) {
  * Get all extracted context for a lead
  * @param {number} leadId 
  */
-function getExtractedContext(leadId) {
+async function getExtractedContext(leadId) {
     try {
-        const contextRows = db.prepare(`
+        const result = await query(`
             SELECT key, value, confidence
             FROM lead_context
-            WHERE lead_id = ?
+            WHERE lead_id = $1
             ORDER BY updated_at DESC
-        `).all(leadId);
+        `, [leadId]);
 
         // Convert to object, keeping most recent value for each key
         const context = {};
         const seen = new Set();
-        for (const row of contextRows) {
+        for (const row of result.rows) {
             if (!seen.has(row.key)) {
                 context[row.key] = row.value;
                 seen.add(row.key);
@@ -88,15 +95,16 @@ function getExtractedContext(leadId) {
  * Build a comprehensive context object for AI prompting
  * @param {number} leadId 
  */
-function buildContextForAI(leadId) {
+async function buildContextForAI(leadId) {
     try {
         // Get lead info
-        const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
+        const leadRes = await query('SELECT * FROM leads WHERE id = $1', [leadId]);
+        const lead = leadRes.rows[0];
         if (!lead) return null;
 
         // Get conversation history
-        const recentMessages = getRecentMessages(leadId, 5);
-        const extractedContext = getExtractedContext(leadId);
+        const recentMessages = await getRecentMessages(leadId, 5);
+        const extractedContext = await getExtractedContext(leadId);
 
         // Format messages for prompt
         const formattedHistory = recentMessages.map(msg => {
@@ -144,8 +152,8 @@ function buildContextForAI(leadId) {
  * Generate a context prompt string for AI
  * @param {number} leadId 
  */
-function generateContextPrompt(leadId) {
-    const context = buildContextForAI(leadId);
+async function generateContextPrompt(leadId) {
+    const context = await buildContextForAI(leadId);
     if (!context) return '';
 
     let prompt = `## LEAD PROFILE
@@ -197,7 +205,7 @@ function generateContextPrompt(leadId) {
  */
 async function updateConversationSummary(leadId, aiSummarizer) {
     try {
-        const messages = getFullConversationHistory(leadId);
+        const messages = await getFullConversationHistory(leadId);
         if (messages.length === 0) return;
 
         const conversationText = messages.map(m => {
@@ -207,7 +215,7 @@ async function updateConversationSummary(leadId, aiSummarizer) {
 
         const summary = await aiSummarizer(conversationText);
 
-        db.prepare(`UPDATE leads SET conversation_summary = ? WHERE id = ?`).run(summary, leadId);
+        await query(`UPDATE leads SET conversation_summary = $1 WHERE id = $2`, [summary, leadId]);
         console.log(`[ConversationMemory] Updated summary for lead ${leadId}`);
     } catch (err) {
         console.error('[ConversationMemory] Error updating summary:', err.message);
@@ -218,19 +226,19 @@ async function updateConversationSummary(leadId, aiSummarizer) {
  * Determine preferred channel based on engagement
  * @param {number} leadId 
  */
-function determinePreferredChannel(leadId) {
+async function determinePreferredChannel(leadId) {
     try {
-        const channelStats = db.prepare(`
+        const result = await query(`
             SELECT type, COUNT(*) as count
             FROM messages
-            WHERE lead_id = ? AND direction = 'INBOUND'
+            WHERE lead_id = $1 AND direction = 'INBOUND'
             GROUP BY type
             ORDER BY count DESC
-        `).all(leadId);
+        `, [leadId]);
 
-        if (channelStats.length > 0) {
-            const preferred = channelStats[0].type;
-            db.prepare(`UPDATE leads SET preferred_channel = ? WHERE id = ?`).run(preferred, leadId);
+        if (result.rows.length > 0) {
+            const preferred = result.rows[0].type;
+            await query(`UPDATE leads SET preferred_channel = $1 WHERE id = $2`, [preferred, leadId]);
             return preferred;
         }
         return 'EMAIL';

@@ -5,7 +5,7 @@
  */
 
 const fetch = require('node-fetch');
-const { db } = require('../db');
+const { query } = require('../db');
 
 const VAPI_API_BASE = 'https://api.vapi.ai';
 
@@ -83,13 +83,13 @@ async function sendRinglessVoicemail(to, voicemailMessage, leadId, options = {})
         console.log(`[VAPI] Voicemail call initiated to ${to}: ${data.id}`);
 
         // Log to database
-        db.prepare(`
+        await query(`
             INSERT INTO messages (lead_id, type, direction, content)
-            VALUES (?, 'VOICEMAIL', 'OUTBOUND', ?)
-        `).run(leadId, `Ringless VM: "${voicemailMessage.substring(0, 100)}..."`);
+            VALUES ($1, 'VOICEMAIL', 'OUTBOUND', $2)
+        `, [leadId, `Ringless VM: "${voicemailMessage.substring(0, 100)}..."`]);
 
         // Update lead
-        db.prepare(`UPDATE leads SET last_contacted_at = CURRENT_TIMESTAMP WHERE id = ?`).run(leadId);
+        await query(`UPDATE leads SET last_contacted_at = CURRENT_TIMESTAMP WHERE id = $1`, [leadId]);
 
         return { success: true, callId: data.id };
 
@@ -103,7 +103,7 @@ async function sendRinglessVoicemail(to, voicemailMessage, leadId, options = {})
  * Handle VAPI webhook for call events
  * Configure webhook in VAPI dashboard: https://your-server.com/webhooks/vapi
  */
-function handleVapiWebhook(body) {
+async function handleVapiWebhook(body) {
     const { message } = body;
 
     if (!message) {
@@ -115,9 +115,9 @@ function handleVapiWebhook(body) {
 
     switch (message.type) {
         case 'end-of-call-report':
-            return handleEndOfCallReport(message);
+            return await handleEndOfCallReport(message);
         case 'function-call':
-            return handleFunctionCall(message);
+            return await handleFunctionCall(message);
         case 'transcript':
             return handleTranscript(message);
         default:
@@ -129,7 +129,7 @@ function handleVapiWebhook(body) {
 /**
  * Handle end of call - extract lead info from inbound calls
  */
-function handleEndOfCallReport(message) {
+async function handleEndOfCallReport(message) {
     const { call, transcript, summary } = message;
 
     // Check if this was an inbound call
@@ -138,36 +138,38 @@ function handleEndOfCallReport(message) {
 
         if (customerPhone) {
             // Check if lead exists
-            let lead = db.prepare('SELECT * FROM leads WHERE phone = ?').get(customerPhone);
+            const result = await query('SELECT * FROM leads WHERE phone = $1', [customerPhone]);
+            let lead = result.rows[0];
 
             if (!lead) {
                 // Create new lead from inbound call
-                const result = db.prepare(`
+                const insertRes = await query(`
                     INSERT INTO leads (name, phone, source, status, step, lead_type, funnel_stage)
-                    VALUES ('Inbound Caller', ?, 'VAPI Inbound', 'NEW', 0, 'INBOUND', 'LEAD')
-                `).run(customerPhone);
+                    VALUES ('Inbound Caller', $1, 'VAPI Inbound', 'NEW', 0, 'INBOUND', 'LEAD')
+                    RETURNING id
+                `, [customerPhone]);
 
-                lead = { id: result.lastInsertRowid, name: 'Inbound Caller' };
+                lead = { id: insertRes.rows[0].id, name: 'Inbound Caller' };
                 console.log(`[VAPI] Created new lead from inbound call: ${lead.id}`);
             }
 
             // Log the call transcript
             if (transcript) {
-                db.prepare(`
+                await query(`
                     INSERT INTO messages (lead_id, type, direction, content)
-                    VALUES (?, 'CALL', 'INBOUND', ?)
-                `).run(lead.id, `AI Call Transcript:\n${transcript}`);
+                    VALUES ($1, 'CALL', 'INBOUND', $2)
+                `, [lead.id, `AI Call Transcript:\n${transcript}`]);
             }
 
             // Log summary if available
             if (summary) {
-                db.prepare(`
-                    UPDATE leads SET notes = COALESCE(notes, '') || ? WHERE id = ?
-                `).run(`\n[VAPI Call Summary] ${summary}`, lead.id);
+                await query(`
+                    UPDATE leads SET notes = COALESCE(notes, '') || $1 WHERE id = $2
+                `, [`\n[VAPI Call Summary] ${summary}`, lead.id]);
             }
 
             // Mark for follow-up
-            db.prepare(`UPDATE leads SET status = 'ACTIVE' WHERE id = ?`).run(lead.id);
+            await query(`UPDATE leads SET status = 'ACTIVE' WHERE id = $1`, [lead.id]);
         }
     }
 
@@ -175,14 +177,14 @@ function handleEndOfCallReport(message) {
     if (call.assistantOverrides?.metadata?.type === 'RINGLESS_VOICEMAIL') {
         const leadId = call.assistantOverrides.metadata.leadId;
         if (leadId) {
-            db.prepare(`
+            await query(`
                 INSERT INTO events (lead_id, type, metadata)
-                VALUES (?, 'VOICEMAIL_DELIVERED', ?)
-            `).run(leadId, JSON.stringify({
+                VALUES ($1, 'VOICEMAIL_DELIVERED', $2)
+            `, [leadId, JSON.stringify({
                 callId: call.id,
                 duration: call.duration,
                 status: call.status
-            }));
+            })]);
         }
     }
 
@@ -192,7 +194,7 @@ function handleEndOfCallReport(message) {
 /**
  * Handle function calls from VAPI assistant (for lead qualification)
  */
-function handleFunctionCall(message) {
+async function handleFunctionCall(message) {
     const { functionCall, call } = message;
 
     if (functionCall.name === 'logLeadInfo') {
@@ -201,16 +203,17 @@ function handleFunctionCall(message) {
 
         if (customerPhone) {
             // Update or create lead with captured info
-            const existing = db.prepare('SELECT * FROM leads WHERE phone = ?').get(customerPhone);
+            const existingRes = await query('SELECT * FROM leads WHERE phone = $1', [customerPhone]);
+            const existing = existingRes.rows[0];
 
             if (existing) {
-                db.prepare(`
+                await query(`
                     UPDATE leads SET 
-                        name = COALESCE(?, name),
-                        company = COALESCE(?, company),
-                        product_interest = COALESCE(?, product_interest)
-                    WHERE id = ?
-                `).run(name, company, interest, existing.id);
+                        name = COALESCE($1, name),
+                        company = COALESCE($2, company),
+                        product_interest = COALESCE($3, product_interest)
+                    WHERE id = $4
+                `, [name, company, interest, existing.id]);
             }
         }
 

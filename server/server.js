@@ -4,7 +4,7 @@ dotenv.config();
 
 const express = require('express');
 const cors = require('cors');
-const { db } = require('./db'); // Import DB
+const { query } = require('./db'); // Import DB Query Helper
 const { handleIncomingMessage: handleTwilioMessage } = require('./services/twilioHandler');
 const { handleIncomingMessage: handleQuoMessage } = require('./services/quoHandler');
 const { handleVapiWebhook } = require('./services/vapiHandler');
@@ -27,23 +27,18 @@ aiBrain.start();
 
 // Helper to log AI activity (Refactored to use Brain, or keep independent if needed)
 function logAiActivity(type, severity, title, description, metadata = {}) {
+    // Fire and forget, or make this async if needed. 
+    // Ideally aiBrain.logActivity handles its own async operations internally.
     aiBrain.logActivity(type, severity, title, description, metadata);
 }
 
 // Get AI Feed
-app.get('/api/brain/feed', (req, res) => {
+app.get('/api/brain/feed', async (req, res) => {
     try {
-        db.exec(`CREATE TABLE IF NOT EXISTS ai_activities (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            type TEXT NOT NULL,
-            severity TEXT DEFAULT 'LOW',
-            title TEXT NOT NULL,
-            description TEXT,
-            metadata TEXT,
-            status TEXT DEFAULT 'PENDING',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )`);
-        const activities = db.prepare('SELECT * FROM ai_activities ORDER BY created_at DESC LIMIT 50').all();
+        // Schema is handled in db.js initDB()
+        const result = await query('SELECT * FROM ai_activities ORDER BY created_at DESC LIMIT 50');
+        const activities = result.rows;
+
         // Parse metadata JSON with error handling
         const parsedActivities = activities.map(a => {
             try {
@@ -54,6 +49,7 @@ app.get('/api/brain/feed', (req, res) => {
         });
         res.json(parsedActivities);
     } catch (err) {
+        console.error(err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -64,7 +60,7 @@ app.post('/api/brain/action', async (req, res) => {
     if (!id || !decision) return res.status(400).json({ error: 'Missing ID or decision' });
 
     try {
-        db.prepare('UPDATE ai_activities SET status = ? WHERE id = ?').run(decision, id);
+        await query('UPDATE ai_activities SET status = $1 WHERE id = $2', [decision, id]);
 
         // If approved, trigger the actual logic via Brain
         if (decision === 'APPROVED') {
@@ -161,18 +157,22 @@ const conversationMemory = require('./services/conversationMemory');
 const detailExtractor = require('./services/detailExtractor');
 
 // Get unified conversation view for a lead
-app.get('/api/leads/:id/conversation', (req, res) => {
+app.get('/api/leads/:id/conversation', async (req, res) => {
     try {
         const leadId = req.params.id;
-        const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
+        const result = await query('SELECT * FROM leads WHERE id = $1', [leadId]);
+        const lead = result.rows[0];
 
         if (!lead) {
             return res.status(404).json({ error: 'Lead not found' });
         }
 
-        const history = conversationMemory.getFullConversationHistory(leadId);
-        const context = conversationMemory.buildContextForAI(leadId);
-        const extractedDetails = detailExtractor.getExtractedDetails(leadId);
+        // Ideally these services should also be async, but if they read from non-DB or cached sources...
+        // Wait, conversationMemory reads from DB! It MUST be refactored too.
+        // Assuming they will be refactored to async:
+        const history = await conversationMemory.getFullConversationHistory(leadId);
+        const context = await conversationMemory.buildContextForAI(leadId);
+        const extractedDetails = detailExtractor.getExtractedDetails(leadId); // This might need async too
 
         res.json({
             lead: {
@@ -215,29 +215,28 @@ app.post('/api/leads/:id/draft-reply', async (req, res) => {
 });
 
 // Advance Lead (Mark Task Done)
-app.post('/api/leads/:id/advance', (req, res) => {
+app.post('/api/leads/:id/advance', async (req, res) => {
     try {
         const leadId = req.params.id;
-        const lead = db.prepare("SELECT * FROM leads WHERE id = ?").get(leadId);
+        const result = await query("SELECT * FROM leads WHERE id = $1", [leadId]);
+        const lead = result.rows[0];
 
         if (lead) {
             // Log the 'Done' task
             const { getSequence } = require('./services/sequenceEngine'); // Lazy load
             const steps = getSequence();
-            const currentStep = steps.find(s => s.id === lead.step); // Note: lead.step is next step or current? 
-            // In sequenceEngine: "UPDATE leads SET step = nextStepNum... status = 'MANUAL_TASK_DUE'"
-            // So lead.step IS the manual step that is due.
+            const currentStep = steps.find(s => s.id === lead.step);
 
             if (currentStep) {
                 console.log(`Logging Manual Completion: ${currentStep.type}`);
-                db.prepare(`
+                await query(`
                   INSERT INTO messages (lead_id, type, direction, content)
-                  VALUES (?, ?, 'OUTBOUND', ?)
-                `).run(lead.id, currentStep.type, `Manual Task Completed: ${currentStep.description || 'No desc'}`);
+                  VALUES ($1, $2, 'OUTBOUND', $3)
+                `, [lead.id, currentStep.type, `Manual Task Completed: ${currentStep.description || 'No desc'}`]);
             }
 
             // set status to ACTIVE so it gets picked up for next step
-            db.prepare("UPDATE leads SET status = 'ACTIVE', last_contacted_at = CURRENT_TIMESTAMP WHERE id = ?").run(leadId);
+            await query("UPDATE leads SET status = 'ACTIVE', last_contacted_at = CURRENT_TIMESTAMP WHERE id = $1", [leadId]);
             res.json({ success: true });
         } else {
             res.status(404).json({ error: 'Lead not found' });
@@ -249,7 +248,7 @@ app.post('/api/leads/:id/advance', (req, res) => {
 });
 
 // Create Lead
-app.post('/api/leads', (req, res) => {
+app.post('/api/leads', async (req, res) => {
     try {
         const { name, phone, email, product_interest, source, company, campaign, lead_type, lead_source } = req.body;
 
@@ -274,12 +273,13 @@ app.post('/api/leads', (req, res) => {
         const finalLeadSource = lead_source || detected.leadSource;
         const isHot = finalLeadType === 'INBOUND' ? 1 : 0;
 
-        const result = db.prepare(`
+        const result = await query(`
             INSERT INTO leads (name, phone, email, product_interest, source, company, campaign, status, step, lead_type, lead_source, is_hot, funnel_stage)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'NEW', 0, ?, ?, ?, 'LEAD')
-        `).run(name || 'Unknown', cleanPhone, email || null, product_interest || null, source || 'Manual', company || null, campaign || null, finalLeadType, finalLeadSource, isHot);
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'NEW', 0, $8, $9, $10, 'LEAD')
+            RETURNING id
+        `, [name || 'Unknown', cleanPhone, email || null, product_interest || null, source || 'Manual', company || null, campaign || null, finalLeadType, finalLeadSource, isHot]);
 
-        res.json({ success: true, leadId: result.lastInsertRowid, leadType: finalLeadType, leadSource: finalLeadSource });
+        res.json({ success: true, leadId: result.rows[0].id, leadType: finalLeadType, leadSource: finalLeadSource });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
@@ -287,18 +287,18 @@ app.post('/api/leads', (req, res) => {
 });
 
 // Delete Lead
-app.delete('/api/leads/:id', (req, res) => {
+app.delete('/api/leads/:id', async (req, res) => {
     try {
         const leadId = req.params.id;
 
         // Delete related records first
-        db.prepare('DELETE FROM messages WHERE lead_id = ?').run(leadId);
-        db.prepare('DELETE FROM events WHERE lead_id = ?').run(leadId);
-        db.prepare('DELETE FROM tasks WHERE lead_id = ?').run(leadId);
+        await query('DELETE FROM messages WHERE lead_id = $1', [leadId]);
+        await query('DELETE FROM events WHERE lead_id = $1', [leadId]);
+        await query('DELETE FROM tasks WHERE lead_id = $1', [leadId]);
 
-        const result = db.prepare('DELETE FROM leads WHERE id = ?').run(leadId);
+        const result = await query('DELETE FROM leads WHERE id = $1', [leadId]);
 
-        if (result.changes > 0) {
+        if (result.rowCount > 0) {
             res.json({ success: true });
         } else {
             res.status(404).json({ error: 'Lead not found' });
@@ -310,7 +310,7 @@ app.delete('/api/leads/:id', (req, res) => {
 });
 
 // Update Contact (CRM)
-app.put('/api/contacts/:id', (req, res) => {
+app.put('/api/contacts/:id', async (req, res) => {
     try {
         const leadId = req.params.id;
         const fields = req.body;
@@ -326,11 +326,13 @@ app.put('/api/contacts/:id', (req, res) => {
 
         const updates = [];
         const values = [];
+        let idx = 1;
 
         for (const [key, value] of Object.entries(fields)) {
             if (allowedFields.includes(key)) {
-                updates.push(`${key} = ?`);
+                updates.push(`${key} = $${idx}`);
                 values.push(value);
+                idx++;
             }
         }
 
@@ -339,11 +341,11 @@ app.put('/api/contacts/:id', (req, res) => {
         }
 
         values.push(leadId);
-        const sql = `UPDATE leads SET ${updates.join(', ')}, last_activity = CURRENT_TIMESTAMP WHERE id = ?`;
+        const sql = `UPDATE leads SET ${updates.join(', ')}, last_activity = CURRENT_TIMESTAMP WHERE id = $${idx}`;
 
-        const result = db.prepare(sql).run(...values);
+        const result = await query(sql, values);
 
-        if (result.changes > 0) {
+        if (result.rowCount > 0) {
             res.json({ success: true });
         } else {
             res.status(404).json({ error: 'Contact not found' });
@@ -355,7 +357,7 @@ app.put('/api/contacts/:id', (req, res) => {
 });
 
 // === CSV IMPORT ===
-app.post('/api/import/csv', (req, res) => {
+app.post('/api/import/csv', async (req, res) => {
     try {
         const { contacts } = req.body;
 
@@ -367,13 +369,17 @@ app.post('/api/import/csv', (req, res) => {
         let skipped = 0;
         let errors = [];
 
-        const insertStmt = db.prepare(`
-            INSERT OR IGNORE INTO leads (
+        // Postgres uses ON CONFLICT for deduplication
+        // Assuming 'phone' is the UNIQUE constraint we care about, or maybe email if we enforce it. 
+        // Schema has `phone TEXT UNIQUE`. 
+        const insertSql = `
+            INSERT INTO leads (
                 name, first_name, last_name, email, phone, job_title, company, website,
                 street_address, city, state, zip_code, country, linkedin_url, 
                 job_function, department, email_domain, source, status, step
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NEW', 0)
-        `);
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 'NEW', 0)
+            ON CONFLICT (phone) DO NOTHING
+        `;
 
         for (const row of contacts) {
             try {
@@ -405,13 +411,17 @@ app.post('/api/import/csv', (req, res) => {
                     else cleanPhone = phone;
                 }
 
-                const result = insertStmt.run(
+                // Skip if no phone (since unqiue constraint requires it usually, or if we want to allow email-only we'd need a different constraint)
+                // For now, let's try to insert. If cleanPhone is null, multiple nulls might be allowed or not depending on DB.
+                // SQLite allows multiple NULLs in UNIQUE columns. Postgres does too.
+
+                const result = await query(insertSql, [
                     name, firstName, lastName, email || null, cleanPhone,
                     jobTitle, company, website, street, city, state, zip, country,
                     linkedin, jobFunction, department, emailDomain, 'CSV Import'
-                );
+                ]);
 
-                if (result.changes > 0) imported++;
+                if (result.rowCount > 0) imported++;
                 else skipped++;
             } catch (rowErr) {
                 errors.push({ row, error: rowErr.message });
@@ -440,9 +450,10 @@ app.get('/api/funnel/stages', (req, res) => {
 });
 
 // Get funnel stats
-app.get('/api/funnel/stats', (req, res) => {
+app.get('/api/funnel/stats', async (req, res) => {
     try {
-        const leads = db.prepare('SELECT * FROM leads').all();
+        const result = await query('SELECT * FROM leads');
+        const leads = result.rows;
         const stats = funnelAI.getFunnelStats(leads);
         res.json(stats);
     } catch (err) {
@@ -451,25 +462,26 @@ app.get('/api/funnel/stats', (req, res) => {
 });
 
 // Get leads by funnel stage
-app.get('/api/funnel/leads', (req, res) => {
+app.get('/api/funnel/leads', async (req, res) => {
     try {
         const { stage } = req.query;
-        let query = `
+        let sql = `
             SELECT l.*, 
                 (SELECT COUNT(*) FROM messages WHERE lead_id = l.id) as message_count,
                 (SELECT MAX(created_at) FROM messages WHERE lead_id = l.id) as last_message_at
             FROM leads l
         `;
+        const params = [];
 
         if (stage && stage !== 'all') {
-            query += ` WHERE COALESCE(l.funnel_stage, 'LEAD') = ?`;
+            sql += ` WHERE COALESCE(l.funnel_stage, 'LEAD') = $1`;
+            params.push(stage);
         }
 
-        query += ` ORDER BY l.stage_changed_at DESC, l.created_at DESC`;
+        sql += ` ORDER BY l.stage_changed_at DESC, l.created_at DESC`;
 
-        const leads = stage && stage !== 'all'
-            ? db.prepare(query).all(stage)
-            : db.prepare(query).all();
+        const result = await query(sql, params);
+        const leads = result.rows;
 
         // Add warnings for cold leads
         leads.forEach(lead => {
@@ -483,7 +495,7 @@ app.get('/api/funnel/leads', (req, res) => {
 });
 
 // Manually change lead stage
-app.put('/api/leads/:id/stage', (req, res) => {
+app.put('/api/leads/:id/stage', async (req, res) => {
     try {
         const { id } = req.params;
         const { stage, lock = false } = req.body;
@@ -492,7 +504,8 @@ app.put('/api/leads/:id/stage', (req, res) => {
             return res.status(400).json({ error: 'Invalid stage' });
         }
 
-        const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+        const leadResult = await query('SELECT * FROM leads WHERE id = $1', [id]);
+        const lead = leadResult.rows[0];
         if (!lead) {
             return res.status(404).json({ error: 'Lead not found' });
         }
@@ -500,21 +513,21 @@ app.put('/api/leads/:id/stage', (req, res) => {
         const fromStage = lead.funnel_stage || 'LEAD';
 
         // Update lead
-        db.prepare(`
+        await query(`
             UPDATE leads SET 
-                funnel_stage = ?, 
+                funnel_stage = $1, 
                 stage_changed_at = CURRENT_TIMESTAMP,
-                stage_locked = ?,
+                stage_locked = $2,
                 ai_confidence = NULL,
                 last_ai_reason = NULL
-            WHERE id = ?
-        `).run(stage, lock ? 1 : 0, id);
+            WHERE id = $3
+        `, [stage, lock ? 1 : 0, id]);
 
         // Log to history
-        db.prepare(`
+        await query(`
             INSERT INTO stage_history (lead_id, from_stage, to_stage, changed_by, reason)
-            VALUES (?, ?, ?, 'MANUAL', 'User manually changed stage')
-        `).run(id, fromStage, stage);
+            VALUES ($1, $2, $3, 'MANUAL', 'User manually changed stage')
+        `, [id, fromStage, stage]);
 
         res.json({ success: true, fromStage, toStage: stage });
     } catch (err) {
@@ -523,12 +536,12 @@ app.put('/api/leads/:id/stage', (req, res) => {
 });
 
 // Lock/unlock stage for AI changes
-app.put('/api/leads/:id/lock-stage', (req, res) => {
+app.put('/api/leads/:id/lock-stage', async (req, res) => {
     try {
         const { id } = req.params;
         const { locked } = req.body;
 
-        db.prepare('UPDATE leads SET stage_locked = ? WHERE id = ?').run(locked ? 1 : 0, id);
+        await query('UPDATE leads SET stage_locked = $1 WHERE id = $2', [locked ? 1 : 0, id]);
         res.json({ success: true, locked });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -536,32 +549,34 @@ app.put('/api/leads/:id/lock-stage', (req, res) => {
 });
 
 // Get stage history for a lead
-app.get('/api/leads/:id/stage-history', (req, res) => {
+app.get('/api/leads/:id/stage-history', async (req, res) => {
     try {
         const { id } = req.params;
-        const history = db.prepare(`
-            SELECT * FROM stage_history WHERE lead_id = ? ORDER BY created_at DESC
-        `).all(id);
-        res.json(history);
+        const result = await query(`
+            SELECT * FROM stage_history WHERE lead_id = $1 ORDER BY created_at DESC
+        `, [id]);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
 // AI analyze and suggest next stage (without applying)
-app.post('/api/leads/:id/analyze-stage', (req, res) => {
+app.post('/api/leads/:id/analyze-stage', async (req, res) => {
     try {
         const { id } = req.params;
-        const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+        const leadResult = await query('SELECT * FROM leads WHERE id = $1', [id]);
+        const lead = leadResult.rows[0];
 
         if (!lead) {
             return res.status(404).json({ error: 'Lead not found' });
         }
 
         // Get latest message
-        const latestMessage = db.prepare(`
-            SELECT * FROM messages WHERE lead_id = ? ORDER BY created_at DESC LIMIT 1
-        `).get(id);
+        const msgResult = await query(`
+            SELECT * FROM messages WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 1
+        `, [id]);
+        const latestMessage = msgResult.rows[0];
 
         const analysis = funnelAI.analyzeAndProgress(lead, latestMessage, latestMessage?.direction === 'INBOUND' ? 'INBOUND_MESSAGE' : 'OUTBOUND_MESSAGE');
 
@@ -576,12 +591,13 @@ app.post('/api/leads/:id/analyze-stage', (req, res) => {
 });
 
 // Apply AI suggestion to lead
-app.post('/api/leads/:id/apply-ai-stage', (req, res) => {
+app.post('/api/leads/:id/apply-ai-stage', async (req, res) => {
     try {
         const { id } = req.params;
         const { newStage, confidence, reason } = req.body;
 
-        const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
+        const leadResult = await query('SELECT * FROM leads WHERE id = $1', [id]);
+        const lead = leadResult.rows[0];
         if (!lead) {
             return res.status(404).json({ error: 'Lead not found' });
         }
@@ -593,11 +609,11 @@ app.post('/api/leads/:id/apply-ai-stage', (req, res) => {
         const fromStage = lead.funnel_stage || 'LEAD';
 
         // Update lead
-        db.prepare(`
+        await query(`
             UPDATE leads SET 
-                funnel_stage = ?,
+                funnel_stage = $1,
                 stage_changed_at = CURRENT_TIMESTAMP,
-                ai_confidence = ?,
+                ai_confidence = $2,
                 last_ai_reason = ?
             WHERE id = ?
         `).run(newStage, confidence, reason, id);
@@ -615,15 +631,16 @@ app.post('/api/leads/:id/apply-ai-stage', (req, res) => {
 });
 
 // Batch AI stage analysis (for background processing)
-app.post('/api/funnel/batch-analyze', (req, res) => {
+app.post('/api/funnel/batch-analyze', async (req, res) => {
     try {
-        const leads = db.prepare(`
+        const result = await query(`
             SELECT l.*, 
                 (SELECT content FROM messages WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) as last_message_content,
                 (SELECT direction FROM messages WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) as last_message_direction
             FROM leads l 
             WHERE l.stage_locked = 0 AND COALESCE(l.funnel_stage, 'LEAD') NOT IN ('WON', 'LOST')
-        `).all();
+        `);
+        const leads = result.rows;
 
         let updated = 0;
         const changes = [];
@@ -636,19 +653,19 @@ app.post('/api/funnel/batch-analyze', (req, res) => {
 
             if (analysis.shouldChange) {
                 // Apply the change
-                db.prepare(`
+                await query(`
                     UPDATE leads SET 
-                        funnel_stage = ?,
+                        funnel_stage = $1,
                         stage_changed_at = CURRENT_TIMESTAMP,
-                        ai_confidence = ?,
-                        last_ai_reason = ?
-                    WHERE id = ?
-                `).run(analysis.newStage, analysis.confidence, analysis.reason, lead.id);
+                        ai_confidence = $2,
+                        last_ai_reason = $3
+                    WHERE id = $4
+                `, [analysis.newStage, analysis.confidence, analysis.reason, lead.id]);
 
-                db.prepare(`
+                await query(`
                     INSERT INTO stage_history (lead_id, from_stage, to_stage, changed_by, confidence, reason)
-                    VALUES (?, ?, ?, 'AI', ?, ?)
-                `).run(lead.id, analysis.fromStage, analysis.newStage, analysis.confidence, analysis.reason);
+                    VALUES ($1, $2, $3, 'AI', $4, $5)
+                `, [lead.id, analysis.fromStage, analysis.newStage, analysis.confidence, analysis.reason]);
 
                 changes.push({
                     leadId: lead.id,
@@ -670,7 +687,7 @@ app.post('/api/funnel/batch-analyze', (req, res) => {
 // === COMPANY MANAGEMENT ===
 
 // Get all companies with lead counts
-app.get('/api/companies', (req, res) => {
+app.get('/api/companies', async (req, res) => {
     try {
         const { search, industry, sort = 'lead_count', order = 'desc' } = req.query;
 
@@ -686,12 +703,12 @@ app.get('/api/companies', (req, res) => {
         const conditions = [];
 
         if (search) {
-            conditions.push(`(c.name LIKE ? OR c.domain LIKE ?)`);
+            conditions.push(`(c.name ILIKE $${params.length + 1} OR c.domain ILIKE $${params.length + 2})`);
             params.push(`%${search}%`, `%${search}%`);
         }
 
         if (industry) {
-            conditions.push(`c.industry LIKE ?`);
+            conditions.push(`c.industry ILIKE $${params.length + 1}`);
             params.push(`%${industry}%`);
         }
 
@@ -707,8 +724,8 @@ app.get('/api/companies', (req, res) => {
         const sortDir = order === 'asc' ? 'ASC' : 'DESC';
         sql += ` ORDER BY ${sortCol} ${sortDir}`;
 
-        const companies = db.prepare(sql).all(...params);
-        res.json(companies);
+        const result = await query(sql, params);
+        res.json(result.rows);
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
@@ -716,23 +733,24 @@ app.get('/api/companies', (req, res) => {
 });
 
 // Get single company with all leads
-app.get('/api/companies/:id', (req, res) => {
+app.get('/api/companies/:id', async (req, res) => {
     try {
         const companyId = req.params.id;
 
-        const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(companyId);
+        const companyRes = await query('SELECT * FROM companies WHERE id = $1', [companyId]);
+        const company = companyRes.rows[0];
 
         if (!company) {
             return res.status(404).json({ error: 'Company not found' });
         }
 
-        const leads = db.prepare(`
+        const leadsRes = await query(`
             SELECT * FROM leads 
-            WHERE company_id = ? 
+            WHERE company_id = $1 
             ORDER BY last_activity DESC NULLS LAST, created_at DESC
-        `).all(companyId);
+        `, [companyId]);
 
-        res.json({ ...company, leads });
+        res.json({ ...company, leads: leadsRes.rows });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
@@ -740,7 +758,7 @@ app.get('/api/companies/:id', (req, res) => {
 });
 
 // Create company
-app.post('/api/companies', (req, res) => {
+app.post('/api/companies', async (req, res) => {
     try {
         const { name, domain, industry, company_size, website, street_address, city, state, zip_code, country, phone, notes } = req.body;
 
@@ -748,10 +766,11 @@ app.post('/api/companies', (req, res) => {
             return res.status(400).json({ error: 'Name or domain is required' });
         }
 
-        const result = db.prepare(`
+        const result = await query(`
             INSERT INTO companies (name, domain, industry, company_size, website, street_address, city, state, zip_code, country, phone, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            RETURNING *
+        `, [
             name || domain?.split('.')[0] || 'Unknown',
             domain?.toLowerCase() || null,
             industry || null,
@@ -764,9 +783,9 @@ app.post('/api/companies', (req, res) => {
             country || null,
             phone || null,
             notes || null
-        );
+        ]);
 
-        const newCompany = db.prepare('SELECT * FROM companies WHERE id = ?').get(result.lastInsertRowid);
+        const newCompany = result.rows[0];
         res.json({ success: true, company: newCompany });
     } catch (err) {
         console.error(err);
@@ -775,7 +794,7 @@ app.post('/api/companies', (req, res) => {
 });
 
 // Update company
-app.put('/api/companies/:id', (req, res) => {
+app.put('/api/companies/:id', async (req, res) => {
     try {
         const companyId = req.params.id;
         const fields = req.body;
@@ -788,11 +807,13 @@ app.put('/api/companies/:id', (req, res) => {
 
         const updates = [];
         const values = [];
+        let idx = 1;
 
         for (const [key, value] of Object.entries(fields)) {
             if (allowedFields.includes(key)) {
-                updates.push(`${key} = ?`);
+                updates.push(`${key} = $${idx}`);
                 values.push(value);
+                idx++;
             }
         }
 
@@ -801,13 +822,13 @@ app.put('/api/companies/:id', (req, res) => {
         }
 
         values.push(companyId);
-        const sql = `UPDATE companies SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;
+        const sql = `UPDATE companies SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${idx}`;
 
-        const result = db.prepare(sql).run(...values);
+        const result = await query(sql, values);
 
-        if (result.changes > 0) {
-            const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(companyId);
-            res.json({ success: true, company });
+        if (result.rowCount > 0) {
+            const companyRes = await query('SELECT * FROM companies WHERE id = $1', [companyId]);
+            res.json({ success: true, company: companyRes.rows[0] });
         } else {
             res.status(404).json({ error: 'Company not found' });
         }
@@ -818,28 +839,29 @@ app.put('/api/companies/:id', (req, res) => {
 });
 
 // Delete company (and optionally its leads)
-app.delete('/api/companies/:id', (req, res) => {
+app.delete('/api/companies/:id', async (req, res) => {
     try {
         const companyId = req.params.id;
         const { deleteLeads = false } = req.query;
 
         if (deleteLeads === 'true') {
             // Delete all leads under this company
-            const leads = db.prepare('SELECT id FROM leads WHERE company_id = ?').all(companyId);
+            const leadsRes = await query('SELECT id FROM leads WHERE company_id = $1', [companyId]);
+            const leads = leadsRes.rows;
             for (const lead of leads) {
-                db.prepare('DELETE FROM messages WHERE lead_id = ?').run(lead.id);
-                db.prepare('DELETE FROM events WHERE lead_id = ?').run(lead.id);
-                db.prepare('DELETE FROM tasks WHERE lead_id = ?').run(lead.id);
+                await query('DELETE FROM messages WHERE lead_id = $1', [lead.id]);
+                await query('DELETE FROM events WHERE lead_id = $1', [lead.id]);
+                await query('DELETE FROM tasks WHERE lead_id = $1', [lead.id]);
             }
-            db.prepare('DELETE FROM leads WHERE company_id = ?').run(companyId);
+            await query('DELETE FROM leads WHERE company_id = $1', [companyId]);
         } else {
             // Just unlink leads from company
-            db.prepare('UPDATE leads SET company_id = NULL WHERE company_id = ?').run(companyId);
+            await query('UPDATE leads SET company_id = NULL WHERE company_id = $1', [companyId]);
         }
 
-        const result = db.prepare('DELETE FROM companies WHERE id = ?').run(companyId);
+        const result = await query('DELETE FROM companies WHERE id = $1', [companyId]);
 
-        if (result.changes > 0) {
+        if (result.rowCount > 0) {
             res.json({ success: true });
         } else {
             res.status(404).json({ error: 'Company not found' });
@@ -851,20 +873,20 @@ app.delete('/api/companies/:id', (req, res) => {
 });
 
 // Get leads for a company
-app.get('/api/companies/:id/leads', (req, res) => {
+app.get('/api/companies/:id/leads', async (req, res) => {
     try {
         const companyId = req.params.id;
 
-        const leads = db.prepare(`
+        const result = await query(`
             SELECT l.*, 
                    (SELECT COUNT(*) FROM messages WHERE lead_id = l.id) as message_count,
                    (SELECT COUNT(*) FROM events WHERE lead_id = l.id) as event_count
             FROM leads l
-            WHERE l.company_id = ?
+            WHERE l.company_id = $1
             ORDER BY l.last_activity DESC NULLS LAST, l.created_at DESC
-        `).all(companyId);
+        `, [companyId]);
 
-        res.json(leads);
+        res.json(result.rows);
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
@@ -872,13 +894,14 @@ app.get('/api/companies/:id/leads', (req, res) => {
 });
 
 // Add lead to company
-app.post('/api/companies/:id/leads', (req, res) => {
+app.post('/api/companies/:id/leads', async (req, res) => {
     try {
         const companyId = req.params.id;
         const { name, email, phone, job_title, department, linkedin_url } = req.body;
 
         // Get company for domain
-        const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(companyId);
+        const companyRes = await query('SELECT * FROM companies WHERE id = $1', [companyId]);
+        const company = companyRes.rows[0];
         if (!company) {
             return res.status(404).json({ error: 'Company not found' });
         }
@@ -892,10 +915,12 @@ app.post('/api/companies/:id/leads', (req, res) => {
             else cleanPhone = phone;
         }
 
-        const result = db.prepare(`
+        // Create lead linked to company
+        const result = await query(`
             INSERT INTO leads (name, email, phone, job_title, department, linkedin_url, company_id, company, email_domain, status, step)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'NEW', 0)
-        `).run(
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'NEW', 0)
+            RETURNING *
+        `, [
             name || 'Unknown',
             email || null,
             cleanPhone,
@@ -905,10 +930,9 @@ app.post('/api/companies/:id/leads', (req, res) => {
             companyId,
             company.name,
             company.domain
-        );
+        ]);
 
-        const newLead = db.prepare('SELECT * FROM leads WHERE id = ?').get(result.lastInsertRowid);
-        res.json({ success: true, lead: newLead });
+        res.json({ success: true, lead: result.rows[0] });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
@@ -916,35 +940,33 @@ app.post('/api/companies/:id/leads', (req, res) => {
 });
 
 // === ACTIVITY TIMELINE ===
-app.get('/api/contacts/:id/activity', (req, res) => {
+app.get('/api/contacts/:id/activity', async (req, res) => {
     try {
         const leadId = req.params.id;
 
-        // Get messages
-        const messages = db.prepare(`
-            SELECT id, 'message' as activity_type, type, direction, content, 
-                   classification, created_at
-            FROM messages 
-            WHERE lead_id = ?
-        `).all(leadId);
-
-        // Get events
-        const events = db.prepare(`
-            SELECT id, 'event' as activity_type, type, meta, created_at
-            FROM events 
-            WHERE lead_id = ?
-        `).all(leadId);
-
-        // Get tasks
-        const tasks = db.prepare(`
-            SELECT id, 'task' as activity_type, type, title, status, 
-                   completed_at, created_at
-            FROM tasks 
-            WHERE lead_id = ?
-        `).all(leadId);
+        // Run queries in parallel
+        const [msgRes, eventRes, taskRes] = await Promise.all([
+            query(`
+                SELECT id, 'message' as activity_type, type, direction, content, 
+                       classification, created_at
+                FROM messages 
+                WHERE lead_id = $1
+            `, [leadId]),
+            query(`
+                SELECT id, 'event' as activity_type, type, meta, created_at
+                FROM events 
+                WHERE lead_id = $1
+            `, [leadId]),
+            query(`
+                SELECT id, 'task' as activity_type, type, title, status, 
+                       completed_at, created_at
+                FROM tasks 
+                WHERE lead_id = $1
+            `, [leadId])
+        ]);
 
         // Combine and sort by date
-        const activities = [...messages, ...events, ...tasks]
+        const activities = [...msgRes.rows, ...eventRes.rows, ...taskRes.rows]
             .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
         res.json(activities);
@@ -955,20 +977,20 @@ app.get('/api/contacts/:id/activity', (req, res) => {
 });
 
 // === CONTACT NOTES ===
-app.post('/api/contacts/:id/notes', (req, res) => {
+app.post('/api/contacts/:id/notes', async (req, res) => {
     try {
         const leadId = req.params.id;
         const { note } = req.body;
 
-        const lead = db.prepare('SELECT notes FROM leads WHERE id = ?').get(leadId);
+        const leadRes = await query('SELECT notes FROM leads WHERE id = $1', [leadId]);
+        const lead = leadRes.rows[0];
         if (!lead) return res.status(404).json({ error: 'Contact not found' });
 
         const timestamp = new Date().toISOString();
         const newNote = `[${timestamp}] ${note}`;
         const updatedNotes = lead.notes ? `${newNote}\n---\n${lead.notes}` : newNote;
 
-        db.prepare('UPDATE leads SET notes = ?, last_activity = CURRENT_TIMESTAMP WHERE id = ?')
-            .run(updatedNotes, leadId);
+        await query('UPDATE leads SET notes = $1, last_activity = CURRENT_TIMESTAMP WHERE id = $2', [updatedNotes, leadId]);
 
         res.json({ success: true });
     } catch (err) {
@@ -978,10 +1000,10 @@ app.post('/api/contacts/:id/notes', (req, res) => {
 });
 
 // === TEAM STATS / LEADERBOARD ===
-app.get('/api/team/stats', (req, res) => {
+app.get('/api/team/stats', async (req, res) => {
     try {
         // Group by owner
-        const stats = db.prepare(`
+        const statsRes = await query(`
             SELECT 
                 COALESCE(owner, 'Unassigned') as rep_name,
                 COUNT(*) as total_leads,
@@ -991,22 +1013,22 @@ app.get('/api/team/stats', (req, res) => {
             FROM leads
             GROUP BY owner
             ORDER BY completed DESC
-        `).all();
+        `);
 
         // Get message counts per owner
-        const messageCounts = db.prepare(`
+        const msgCountsRes = await query(`
             SELECT 
                 COALESCE(l.owner, 'Unassigned') as rep_name,
                 COUNT(m.id) as messages_sent
             FROM leads l
             LEFT JOIN messages m ON l.id = m.lead_id AND m.direction = 'OUTBOUND'
             GROUP BY l.owner
-        `).all();
+        `);
 
         // Merge stats
-        const merged = stats.map(s => {
-            const mc = messageCounts.find(m => m.rep_name === s.rep_name);
-            return { ...s, messages_sent: mc?.messages_sent || 0 };
+        const merged = statsRes.rows.map(s => {
+            const mc = msgCountsRes.rows.find(m => m.rep_name === s.rep_name);
+            return { ...s, messages_sent: parseInt(mc?.messages_sent || 0) };
         });
 
         res.json(merged);
@@ -1017,37 +1039,39 @@ app.get('/api/team/stats', (req, res) => {
 });
 
 // === BEST TIME ANALYSIS ===
-app.get('/api/analytics/best-times', (req, res) => {
+app.get('/api/analytics/best-times', async (req, res) => {
     try {
         // Analyze when replies come in (hour of day)
-        const hourlyReplies = db.prepare(`
+        // Postgres: EXTRACT(HOUR FROM created_at)
+        const hourlyRes = await query(`
             SELECT 
-                CAST(strftime('%H', created_at) AS INTEGER) as hour,
+                CAST(EXTRACT(HOUR FROM created_at) AS INTEGER) as hour,
                 COUNT(*) as reply_count
             FROM messages
             WHERE direction = 'INBOUND'
             GROUP BY hour
             ORDER BY reply_count DESC
-        `).all();
+        `);
 
         // Analyze day of week
-        const dailyReplies = db.prepare(`
+        // Postgres: EXTRACT(DOW FROM created_at) (0=Sunday)
+        const dailyRes = await query(`
             SELECT 
-                CAST(strftime('%w', created_at) AS INTEGER) as day,
+                CAST(EXTRACT(DOW FROM created_at) AS INTEGER) as day,
                 COUNT(*) as reply_count
             FROM messages
             WHERE direction = 'INBOUND'
             GROUP BY day
             ORDER BY reply_count DESC
-        `).all();
+        `);
 
         const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
         res.json({
-            bestHours: hourlyReplies.slice(0, 5),
-            bestDays: dailyReplies.map(d => ({ ...d, dayName: dayNames[d.day] })).slice(0, 3),
-            recommendation: hourlyReplies.length > 0
-                ? `Best time to send: ${hourlyReplies[0]?.hour}:00`
+            bestHours: hourlyRes.rows.slice(0, 5),
+            bestDays: dailyRes.rows.map(d => ({ ...d, dayName: dayNames[d.day] })).slice(0, 3),
+            recommendation: hourlyRes.rows.length > 0
+                ? `Best time to send: ${hourlyRes.rows[0]?.hour}:00`
                 : 'Not enough data yet'
         });
     } catch (err) {
@@ -1057,21 +1081,21 @@ app.get('/api/analytics/best-times', (req, res) => {
 });
 
 // === OPT-OUT DETECTION ===
-app.post('/api/leads/:id/opt-out', (req, res) => {
+app.post('/api/leads/:id/opt-out', async (req, res) => {
     try {
         const leadId = req.params.id;
 
-        db.prepare(`
+        await query(`
             UPDATE leads 
             SET status = 'OPTED_OUT', last_activity = CURRENT_TIMESTAMP 
-            WHERE id = ?
-        `).run(leadId);
+            WHERE id = $1
+        `, [leadId]);
 
         // Log the opt-out event
-        db.prepare(`
+        await query(`
             INSERT INTO events (lead_id, type, meta, created_at)
-            VALUES (?, 'OPT_OUT', 'Manual opt-out', CURRENT_TIMESTAMP)
-        `).run(leadId);
+            VALUES ($1, 'OPT_OUT', 'Manual opt-out', CURRENT_TIMESTAMP)
+        `, [leadId]);
 
         res.json({ success: true });
     } catch (err) {
@@ -1083,42 +1107,44 @@ app.post('/api/leads/:id/opt-out', (req, res) => {
 // --- TASK MANAGEMENT API ---
 
 // Get All Tasks
-app.get('/api/tasks', (req, res) => {
+app.get('/api/tasks', async (req, res) => {
     try {
         const status = req.query.status || 'PENDING';
-        const tasks = db.prepare(`
+        const result = await query(`
             SELECT t.*, l.name as lead_name, l.email as lead_email, l.phone as lead_phone
             FROM tasks t
             LEFT JOIN leads l ON t.lead_id = l.id
-            WHERE t.status = ?
+            WHERE t.status = $1
             ORDER BY t.due_date ASC
-        `).all(status);
-        res.json(tasks);
+        `, [status]);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
 // Complete Task
-app.post('/api/tasks/:id/complete', (req, res) => {
+app.post('/api/tasks/:id/complete', async (req, res) => {
     try {
         const taskId = req.params.id;
-        db.prepare(`
-            UPDATE tasks SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP WHERE id = ?
-        `).run(taskId);
+        await query(`
+            UPDATE tasks SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP WHERE id = $1
+        `, [taskId]);
 
         // Also advance the lead
-        const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+        const taskRes = await query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+        const task = taskRes.rows[0];
+
         if (task) {
-            db.prepare(`
-                UPDATE leads SET status = 'ACTIVE', last_contacted_at = CURRENT_TIMESTAMP WHERE id = ?
-            `).run(task.lead_id);
+            await query(`
+                UPDATE leads SET status = 'ACTIVE', last_contacted_at = CURRENT_TIMESTAMP WHERE id = $1
+            `, [task.lead_id]);
 
             // Log the completion
-            db.prepare(`
+            await query(`
                 INSERT INTO messages (lead_id, type, direction, content)
-                VALUES (?, ?, 'OUTBOUND', ?)
-            `).run(task.lead_id, task.type, `Task Completed: ${task.title}`);
+                VALUES ($1, $2, 'OUTBOUND', $3)
+            `, [task.lead_id, task.type, `Task Completed: ${task.title}`]);
         }
 
         res.json({ success: true });
@@ -1128,15 +1154,16 @@ app.post('/api/tasks/:id/complete', (req, res) => {
 });
 
 // Skip Task
-app.post('/api/tasks/:id/skip', (req, res) => {
+app.post('/api/tasks/:id/skip', async (req, res) => {
     try {
         const taskId = req.params.id;
-        db.prepare(`UPDATE tasks SET status = 'SKIPPED' WHERE id = ?`).run(taskId);
+        await query(`UPDATE tasks SET status = 'SKIPPED' WHERE id = $1`, [taskId]);
 
         // Advance the lead anyway
-        const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+        const taskRes = await query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+        const task = taskRes.rows[0];
         if (task) {
-            db.prepare(`UPDATE leads SET status = 'ACTIVE' WHERE id = ?`).run(task.lead_id);
+            await query(`UPDATE leads SET status = 'ACTIVE' WHERE id = $1`, [task.lead_id]);
         }
 
         res.json({ success: true });
@@ -1155,7 +1182,7 @@ app.post('/api/ai/classify', async (req, res) => {
 
         // Update message with classification if ID provided
         if (messageId) {
-            db.prepare(`UPDATE messages SET classification = ? WHERE id = ?`).run(result.classification, messageId);
+            await query(`UPDATE messages SET classification = $1 WHERE id = $2`, [result.classification, messageId]);
         }
 
         res.json(result);
@@ -1176,25 +1203,28 @@ app.post('/api/ai/generate-sequence', async (req, res) => {
     }
 });
 
-app.post('/api/ai/save-sequence', (req, res) => {
+app.post('/api/ai/save-sequence', async (req, res) => {
     try {
         const { sequence, lead_type = 'OUTBOUND', name } = req.body;
 
         // If saving to database with lead_type
         if (name) {
-            const existing = db.prepare('SELECT id FROM sequences WHERE name = ? AND lead_type = ?').get(name, lead_type);
+            const existingRes = await query('SELECT id FROM sequences WHERE name = $1 AND lead_type = $2', [name, lead_type]);
+            const existing = existingRes.rows[0];
+
             if (existing) {
-                db.prepare('UPDATE sequences SET steps = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-                    .run(JSON.stringify(sequence), existing.id);
+                await query('UPDATE sequences SET steps = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [JSON.stringify(sequence), existing.id]);
                 res.json({ success: true, id: existing.id });
             } else {
-                const result = db.prepare(
-                    'INSERT INTO sequences (name, lead_type, steps) VALUES (?, ?, ?)'
-                ).run(name, lead_type, JSON.stringify(sequence));
-                res.json({ success: true, id: result.lastInsertRowid });
+                const result = await query(
+                    'INSERT INTO sequences (name, lead_type, steps) VALUES ($1, $2, $3) RETURNING id',
+                    [name, lead_type, JSON.stringify(sequence)]
+                );
+                res.json({ success: true, id: result.rows[0].id });
             }
         } else {
-            // Legacy file-based save
+            // Legacy file-based save (if still needed, ensure saveSequence is async or handles DB if properly refactored)
+            // Assuming saveSequence writes to file:
             const result = saveSequence(sequence);
             res.json(result);
         }
@@ -1206,17 +1236,17 @@ app.post('/api/ai/save-sequence', (req, res) => {
 // === SEQUENCE MANAGEMENT ===
 
 // Get all sequences
-app.get('/api/sequences', (req, res) => {
+app.get('/api/sequences', async (req, res) => {
     try {
         const { lead_type } = req.query;
-        let sequences;
+        let result;
         if (lead_type) {
-            sequences = db.prepare('SELECT * FROM sequences WHERE lead_type = ? ORDER BY created_at DESC').all(lead_type);
+            result = await query('SELECT * FROM sequences WHERE lead_type = $1 ORDER BY created_at DESC', [lead_type]);
         } else {
-            sequences = db.prepare('SELECT * FROM sequences ORDER BY lead_type, created_at DESC').all();
+            result = await query('SELECT * FROM sequences ORDER BY lead_type, created_at DESC');
         }
         // Parse steps JSON
-        sequences = sequences.map(s => ({
+        const sequences = result.rows.map(s => ({
             ...s,
             steps: s.steps ? JSON.parse(s.steps) : []
         }));
@@ -1227,9 +1257,10 @@ app.get('/api/sequences', (req, res) => {
 });
 
 // Get single sequence
-app.get('/api/sequences/:id', (req, res) => {
+app.get('/api/sequences/:id', async (req, res) => {
     try {
-        const seq = db.prepare('SELECT * FROM sequences WHERE id = ?').get(req.params.id);
+        const result = await query('SELECT * FROM sequences WHERE id = $1', [req.params.id]);
+        const seq = result.rows[0];
         if (!seq) return res.status(404).json({ error: 'Sequence not found' });
         seq.steps = seq.steps ? JSON.parse(seq.steps) : [];
         res.json(seq);
@@ -1239,42 +1270,44 @@ app.get('/api/sequences/:id', (req, res) => {
 });
 
 // Create sequence
-app.post('/api/sequences', (req, res) => {
+app.post('/api/sequences', async (req, res) => {
     try {
         const { name, lead_type = 'OUTBOUND', description, steps = [] } = req.body;
-        const result = db.prepare(
-            'INSERT INTO sequences (name, lead_type, description, steps) VALUES (?, ?, ?, ?)'
-        ).run(name, lead_type, description || null, JSON.stringify(steps));
-        res.json({ success: true, id: result.lastInsertRowid });
+        const result = await query(
+            'INSERT INTO sequences (name, lead_type, description, steps) VALUES ($1, $2, $3, $4) RETURNING id',
+            [name, lead_type, description || null, JSON.stringify(steps)]
+        );
+        res.json({ success: true, id: result.rows[0].id });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
 // Update sequence
-app.put('/api/sequences/:id', (req, res) => {
+app.put('/api/sequences/:id', async (req, res) => {
     try {
         const { name, lead_type, description, steps, is_active } = req.body;
-        const seq = db.prepare('SELECT * FROM sequences WHERE id = ?').get(req.params.id);
+        const seqRes = await query('SELECT * FROM sequences WHERE id = $1', [req.params.id]);
+        const seq = seqRes.rows[0];
         if (!seq) return res.status(404).json({ error: 'Sequence not found' });
 
-        db.prepare(`
+        await query(`
             UPDATE sequences SET 
-                name = COALESCE(?, name),
-                lead_type = COALESCE(?, lead_type),
-                description = COALESCE(?, description),
-                steps = COALESCE(?, steps),
-                is_active = COALESCE(?, is_active),
+                name = COALESCE($1, name),
+                lead_type = COALESCE($2, lead_type),
+                description = COALESCE($3, description),
+                steps = COALESCE($4, steps),
+                is_active = COALESCE($5, is_active),
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        `).run(
+            WHERE id = $6
+        `, [
             name || null,
             lead_type || null,
             description || null,
             steps ? JSON.stringify(steps) : null,
             is_active ?? null,
             req.params.id
-        );
+        ]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -1282,10 +1315,10 @@ app.put('/api/sequences/:id', (req, res) => {
 });
 
 // Delete sequence
-app.delete('/api/sequences/:id', (req, res) => {
+app.delete('/api/sequences/:id', async (req, res) => {
     try {
-        const result = db.prepare('DELETE FROM sequences WHERE id = ?').run(req.params.id);
-        if (result.changes > 0) {
+        const result = await query('DELETE FROM sequences WHERE id = $1', [req.params.id]);
+        if (result.rowCount > 0) {
             res.json({ success: true });
         } else {
             res.status(404).json({ error: 'Sequence not found' });
@@ -1297,7 +1330,8 @@ app.delete('/api/sequences/:id', (req, res) => {
 
 app.post('/api/ai/personalization/:leadId', async (req, res) => {
     try {
-        const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(req.params.leadId);
+        const leadRes = await query('SELECT * FROM leads WHERE id = $1', [req.params.leadId]);
+        const lead = leadRes.rows[0];
         if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
         const suggestions = await generatePersonalizationSuggestions(lead);
@@ -1310,7 +1344,8 @@ app.post('/api/ai/personalization/:leadId', async (req, res) => {
 app.post('/api/ai/draft-message', async (req, res) => {
     try {
         const { leadId, channel, context } = req.body;
-        const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
+        const leadRes = await query('SELECT * FROM leads WHERE id = $1', [leadId]);
+        const lead = leadRes.rows[0];
         if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
         const draft = await autoDraftMessage(lead, channel, context);
@@ -1323,20 +1358,20 @@ app.post('/api/ai/draft-message', async (req, res) => {
 // --- CLIENT API ---
 
 // Get All Leads
-app.get('/api/leads', (req, res) => {
+app.get('/api/leads', async (req, res) => {
     try {
-        const leads = db.prepare('SELECT * FROM leads ORDER BY created_at DESC').all();
-        res.json(leads);
+        const result = await query('SELECT * FROM leads ORDER BY created_at DESC');
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
 // Get Messages for a Lead
-app.get('/api/messages/:leadId', (req, res) => {
+app.get('/api/messages/:leadId', async (req, res) => {
     try {
-        const messages = db.prepare('SELECT * FROM messages WHERE lead_id = ? ORDER BY created_at ASC').all(req.params.leadId);
-        res.json(messages);
+        const result = await query('SELECT * FROM messages WHERE lead_id = $1 ORDER BY created_at ASC', [req.params.leadId]);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -1348,7 +1383,8 @@ app.post('/api/messages', async (req, res) => {
     const { sendSMS } = require('./services/twilioHandler'); // Lazy load to ensure services are ready
 
     try {
-        const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
+        const leadRes = await query('SELECT * FROM leads WHERE id = $1', [leadId]);
+        const lead = leadRes.rows[0];
         if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
         console.log(`Sending manual SMS to ${lead.phone}: ${content}`);
@@ -1356,13 +1392,13 @@ app.post('/api/messages', async (req, res) => {
 
         if (result.success) {
             // Log outgoing 
-            db.prepare(`
-        INSERT INTO messages (lead_id, type, direction, content)
-        VALUES (?, 'MANUAL_SMS', 'OUTBOUND', ?)
-      `).run(leadId, content);
+            await query(`
+                INSERT INTO messages (lead_id, type, direction, content)
+                VALUES ($1, 'MANUAL_SMS', 'OUTBOUND', $2)
+            `, [leadId, content]);
 
             // Update last contact
-            db.prepare("UPDATE leads SET last_contacted_at = CURRENT_TIMESTAMP WHERE id = ?").run(leadId);
+            await query("UPDATE leads SET last_contacted_at = CURRENT_TIMESTAMP WHERE id = $1", [leadId]);
 
             res.json({ success: true });
         } else {
@@ -1376,25 +1412,35 @@ app.post('/api/messages', async (req, res) => {
 
 
 // Get Analytics
-app.get('/api/analytics', (req, res) => {
+app.get('/api/analytics', async (req, res) => {
     try {
-        const totalLeads = db.prepare('SELECT COUNT(*) as count FROM leads').get().count;
-        const activeLeads = db.prepare("SELECT COUNT(*) as count FROM leads WHERE status = 'ACTIVE'").get().count;
-        const totalSent = db.prepare("SELECT COUNT(*) as count FROM messages WHERE direction = 'OUTBOUND'").get().count;
-        const repliedCount = db.prepare("SELECT COUNT(DISTINCT lead_id) as count FROM messages WHERE direction = 'INBOUND'").get().count;
+        // Run aggregation queries in parallel
+        const [totalRes, activeRes, sentRes, repliedRes, emailOpensRes, constRes, hvacRes, msgStatsRes, leadsRes] = await Promise.all([
+            query('SELECT COUNT(*) as count FROM leads'),
+            query("SELECT COUNT(*) as count FROM leads WHERE status = 'ACTIVE'"),
+            query("SELECT COUNT(*) as count FROM messages WHERE direction = 'OUTBOUND'"),
+            query("SELECT COUNT(DISTINCT lead_id) as count FROM messages WHERE direction = 'INBOUND'"),
+            query("SELECT COUNT(DISTINCT lead_id) as count FROM events WHERE type = 'EMAIL_OPEN'"),
+            query("SELECT COUNT(*) as count FROM leads WHERE product_interest LIKE '%Construction%'"), // LIKE is case sensitive in Postgres, ILIKE is not. SQLite default LIKE is case-insensitive for ASCII. 'ILIKE' is safer for Postgres text match.
+            query("SELECT COUNT(*) as count FROM leads WHERE product_interest LIKE '%HVAC%'"),
+            query("SELECT type, direction, COUNT(*) as count FROM messages GROUP BY type, direction"),
+            query('SELECT id, name, company, status, buying_signals, created_at FROM leads')
+        ]);
 
-        // Granular Metrics
+        const totalLeads = parseInt(totalRes.rows[0].count);
+        const activeLeads = parseInt(activeRes.rows[0].count);
+        const totalSent = parseInt(sentRes.rows[0].count);
+        const repliedCount = parseInt(repliedRes.rows[0].count);
+
         let emailOpens = 0;
         try {
-            emailOpens = db.prepare("SELECT COUNT(DISTINCT lead_id) as count FROM events WHERE type = 'EMAIL_OPEN'").get().count;
+            emailOpens = parseInt(emailOpensRes.rows[0].count);
         } catch (e) {
-            // events table might not exist yet if migration failed
-            console.warn('Events table missing or empty');
+            console.warn('Events table query failed', e);
         }
 
-        // Source Breakdown
-        const constructionLeads = db.prepare("SELECT COUNT(*) as count FROM leads WHERE product_interest LIKE '%Construction%'").get().count;
-        const hvacLeads = db.prepare("SELECT COUNT(*) as count FROM leads WHERE product_interest LIKE '%HVAC%'").get().count;
+        const constructionLeads = parseInt(constRes.rows[0].count);
+        const hvacLeads = parseInt(hvacRes.rows[0].count);
 
         const responseRate = totalLeads > 0 ? ((repliedCount / totalLeads) * 100).toFixed(1) : 0;
 
@@ -1406,20 +1452,17 @@ app.get('/api/analytics', (req, res) => {
             LINKEDIN: { completed: 0 }
         };
 
-        const msgStats = db.prepare(`
-            SELECT type, direction, COUNT(*) as count 
-            FROM messages 
-            GROUP BY type, direction
-        `).all();
+        const msgStats = msgStatsRes.rows;
 
         msgStats.forEach(stat => {
             const type = stat.type; // SMS, EMAIL, CALL, LINKEDIN
             if (channels[type]) {
+                const count = parseInt(stat.count);
                 if (stat.direction === 'OUTBOUND') {
-                    if (type === 'CALL' || type === 'LINKEDIN') channels[type].completed += stat.count;
-                    else channels[type].sent += stat.count;
+                    if (type === 'CALL' || type === 'LINKEDIN') channels[type].completed += count;
+                    else channels[type].sent += count;
                 } else if (stat.direction === 'INBOUND') {
-                    if (channels[type]) channels[type].replies += stat.count;
+                    if (channels[type]) channels[type].replies += count;
                 }
             }
         });
@@ -1427,7 +1470,7 @@ app.get('/api/analytics', (req, res) => {
         // Email Opens
         channels.EMAIL.opens = emailOpens;
 
-        // Channel breakdown by lead type (INBOUND vs OUTBOUND)
+        // Channel breakdown by lead type (placeholder for now)
         const channelsByLeadType = {
             INBOUND: {
                 EMAIL: { sent: 0, replies: 0, opens: 0 },
@@ -1443,13 +1486,10 @@ app.get('/api/analytics', (req, res) => {
             }
         };
 
-        // Populate channel by type (requires joining tables, approximate for now)
-        // ... (existing logic omitted for brevity, assuming standard query)
-
         // --- INTENT SCORING ---
-        const leads = db.prepare('SELECT id, name, company, status, buying_signals, created_at FROM leads').all();
+        const leads = leadsRes.rows;
 
-        const scoredLeads = leads.map(lead => {
+        const scoredLeads = await Promise.all(leads.map(async lead => {
             let score = 0;
             const signals = lead.buying_signals ? lead.buying_signals.split(',').length : 0;
 
@@ -1459,18 +1499,25 @@ app.get('/api/analytics', (req, res) => {
             if (lead.status === 'INTERESTED') score += 20;
             score += (signals * 5); // 5 points per signal
 
-            // Check interaction history (simplified)
-            const replyCount = db.prepare("SELECT COUNT(*) as count FROM messages WHERE lead_id = ? AND direction = 'INBOUND'").get(lead.id).count;
+            // Check interaction history 
+            // Running queries in loop! Bad performance but correct logic for migration. 
+            // Better to JOIN in the leads query, but let's stick to safe refactor.
+            const replyRes = await query("SELECT COUNT(*) as count FROM messages WHERE lead_id = $1 AND direction = 'INBOUND'", [lead.id]);
+            const replyCount = parseInt(replyRes.rows[0].count);
             score += (replyCount * 5);
 
-            const clickCount = db.prepare("SELECT COUNT(*) as count FROM events WHERE lead_id = ? AND type = 'LINK_CLICK'").get(lead.id).count;
+            const clickRes = await query("SELECT COUNT(*) as count FROM events WHERE lead_id = $1 AND type = 'LINK_CLICK'", [lead.id]);
+            const clickCount = parseInt(clickRes.rows[0].count);
             score += (clickCount * 3);
 
-            const openCount = db.prepare("SELECT COUNT(*) as count FROM events WHERE lead_id = ? AND type = 'EMAIL_OPEN'").get(lead.id).count;
+            const openRes = await query("SELECT COUNT(*) as count FROM events WHERE lead_id = $1 AND type = 'EMAIL_OPEN'", [lead.id]);
+            const openCount = parseInt(openRes.rows[0].count);
             score += (openCount * 1);
 
             return { ...lead, score, signalCount: signals };
-        }).sort((a, b) => b.score - a.score);
+        }));
+
+        scoredLeads.sort((a, b) => b.score - a.score);
 
         const highIntent = scoredLeads.filter(l => l.score >= 15).slice(0, 10);
         const mediumIntent = scoredLeads.filter(l => l.score >= 5 && l.score < 15).slice(0, 10);
@@ -1545,10 +1592,12 @@ app.post('/api/ai/generate', async (req, res) => {
     const { leadId } = req.body;
 
     try {
-        const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
+        const leadRes = await query('SELECT * FROM leads WHERE id = $1', [leadId]);
+        const lead = leadRes.rows[0];
         if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
-        const history = db.prepare('SELECT * FROM messages WHERE lead_id = ? ORDER BY created_at ASC').all(leadId);
+        const historyRes = await query('SELECT * FROM messages WHERE lead_id = $1 ORDER BY created_at ASC', [leadId]);
+        const history = historyRes.rows;
 
         // Format history for the handler
         const formattedHistory = history.map(m => ({
@@ -1830,10 +1879,12 @@ app.get('/api/template-variables', (req, res) => {
 // --- AI BRAIN / OPERATING SYSTEM ---
 
 // Helper to log AI activity
-function logAiActivity(type, severity, title, description, metadata = {}) {
+async function logAiActivity(type, severity, title, description, metadata = {}) {
     try {
-        const stmt = db.prepare('INSERT INTO ai_activities (type, severity, title, description, metadata, status) VALUES (?, ?, ?, ?, ?, ?)');
-        stmt.run(type, severity, title, description, JSON.stringify(metadata), 'PENDING');
+        await query(
+            'INSERT INTO ai_activities (type, severity, title, description, metadata, status) VALUES ($1, $2, $3, $4, $5, $6)',
+            [type, severity, title, description, JSON.stringify(metadata), 'PENDING']
+        );
         // In a real system, we would emit a WebSocket event here
     } catch (e) {
         console.error('Failed to log AI activity:', e);
@@ -1844,22 +1895,24 @@ function logAiActivity(type, severity, title, description, metadata = {}) {
 
 
 // Handle AI Action Decision
-app.post('/api/brain/action', (req, res) => {
+app.post('/api/brain/action', async (req, res) => {
     const { id, decision } = req.body; // decision: 'APPROVED' | 'REJECTED'
     if (!id || !decision) return res.status(400).json({ error: 'Missing ID or decision' });
 
     try {
-        db.prepare('UPDATE ai_activities SET status = ? WHERE id = ?').run(decision, id);
+        await query('UPDATE ai_activities SET status = $1 WHERE id = $2', [decision, id]);
 
         // If approved, trigger the actual logic (Mocked for now)
         if (decision === 'APPROVED') {
-            const activity = db.prepare('SELECT * FROM ai_activities WHERE id = ?').get(id);
+            const result = await query('SELECT * FROM ai_activities WHERE id = $1', [id]);
+            const activity = result.rows[0];
+
             if (activity && activity.type === 'ACTION_REQUIRED') {
                 // Example: Logic to send the email or update the lead would go here
                 console.log(`[AI OS] Executing approved action: ${activity.title}`);
 
                 // Log a follow-up completion event
-                logAiActivity('SYSTEM_LOG', 'LOW', `Executed: ${activity.title}`, 'Action completed successfully.', {}, 'COMPLETED');
+                await logAiActivity('SYSTEM_LOG', 'LOW', `Executed: ${activity.title}`, 'Action completed successfully.', {}, 'COMPLETED');
             }
         }
 

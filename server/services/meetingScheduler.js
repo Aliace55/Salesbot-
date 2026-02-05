@@ -3,7 +3,7 @@
  * Calendar integration placeholder for Google Calendar
  */
 
-const { db } = require('../db');
+const { query } = require('../db');
 
 // TODO: Add Google OAuth integration
 // const { google } = require('googleapis');
@@ -15,14 +15,23 @@ const { db } = require('../db');
  * @param {number} durationMinutes - Meeting duration
  * @returns {object[]} Available slots
  */
-function getAvailableSlots(startDate = new Date(), endDate = null, durationMinutes = 30) {
+async function getAvailableSlots(startDate = new Date(), endDate = null, durationMinutes = 30) {
     // Default to 7 days from now
     if (!endDate) {
         endDate = new Date(startDate);
         endDate.setDate(endDate.getDate() + 7);
     }
 
-    // For now, return mock availability (9 AM - 5 PM weekdays)
+    // Fetch all meetings in range once to avoid N+1 DB calls
+    const meetingsRes = await query(`
+        SELECT start_time, end_time FROM meetings 
+        WHERE start_time < $1 AND end_time > $2
+    `, [endDate.toISOString(), startDate.toISOString()]);
+    const bookedMeetings = meetingsRes.rows.map(m => ({
+        start: new Date(m.start_time).getTime(),
+        end: new Date(m.end_time).getTime()
+    }));
+
     const slots = [];
     const current = new Date(startDate);
     current.setHours(9, 0, 0, 0);
@@ -34,14 +43,17 @@ function getAvailableSlots(startDate = new Date(), endDate = null, durationMinut
             for (let hour = 9; hour < 17; hour++) {
                 const slotTime = new Date(current);
                 slotTime.setHours(hour, 0, 0, 0);
+                const slotEndTime = new Date(slotTime.getTime() + durationMinutes * 60000);
 
-                // Check if slot is already booked
-                const isBooked = checkIfSlotBooked(slotTime, durationMinutes);
+                // Check if slot is booked (in memory)
+                const isBooked = bookedMeetings.some(meeting =>
+                    meeting.start < slotEndTime.getTime() && meeting.end > slotTime.getTime()
+                );
 
                 if (!isBooked && slotTime > new Date()) {
                     slots.push({
                         start: slotTime.toISOString(),
-                        end: new Date(slotTime.getTime() + durationMinutes * 60000).toISOString(),
+                        end: slotEndTime.toISOString(),
                         available: true
                     });
                 }
@@ -54,64 +66,58 @@ function getAvailableSlots(startDate = new Date(), endDate = null, durationMinut
 }
 
 /**
- * Check if a time slot is already booked
- */
-function checkIfSlotBooked(slotTime, durationMinutes) {
-    try {
-        const slotEnd = new Date(slotTime.getTime() + durationMinutes * 60000);
-
-        const conflict = db.prepare(`
-            SELECT COUNT(*) as count FROM meetings
-            WHERE start_time < ? AND end_time > ?
-        `).get(slotEnd.toISOString(), slotTime.toISOString());
-
-        return conflict?.count > 0;
-    } catch (error) {
-        // Table might not exist yet
-        return false;
-    }
-}
-
-/**
  * Book a meeting
  * @param {object} params - Booking parameters
  */
-function bookMeeting(params) {
+async function bookMeeting(params) {
     const { leadId, startTime, endTime, title, description } = params;
 
     try {
-        // Ensure meetings table exists
-        db.exec(`
+        // Ensure meetings table exists (Postgres syntax)
+        await query(`
             CREATE TABLE IF NOT EXISTS meetings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 lead_id INTEGER,
                 title TEXT,
                 description TEXT,
-                start_time DATETIME,
-                end_time DATETIME,
+                start_time TIMESTAMP,
+                end_time TIMESTAMP,
                 status TEXT DEFAULT 'SCHEDULED',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
 
-        const result = db.prepare(`
+        // Check availability strictly before booking
+        const conflictRes = await query(`
+            SELECT COUNT(*) as count FROM meetings
+            WHERE start_time < $1 AND end_time > $2
+        `, [endTime, startTime]);
+
+        if (parseInt(conflictRes.rows[0].count) > 0) {
+            return { success: false, error: 'Slot already booked' };
+        }
+
+        const insertRes = await query(`
             INSERT INTO meetings (lead_id, title, description, start_time, end_time)
-            VALUES (?, ?, ?, ?, ?)
-        `).run(leadId, title, description, startTime, endTime);
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
+        `, [leadId, title, description, startTime, endTime]);
+
+        const meetingId = insertRes.rows[0].id;
 
         // Create a task for the meeting
-        db.prepare(`
+        await query(`
             INSERT INTO tasks (lead_id, type, title, description, due_date, status)
-            VALUES (?, 'MEETING', ?, ?, ?, 'PENDING')
-        `).run(leadId, title, description, startTime);
+            VALUES ($1, 'MEETING', $2, $3, $4, 'PENDING')
+        `, [leadId, title, description, startTime]);
 
         // Log event
-        db.prepare(`
-            INSERT INTO events (lead_id, type, meta)
-            VALUES (?, 'MEETING_BOOKED', ?)
-        `).run(leadId, JSON.stringify({ meetingId: result.lastInsertRowid, startTime, endTime }));
+        await query(`
+            INSERT INTO events (lead_id, type, metadata)
+            VALUES ($1, 'MEETING_BOOKED', $2)
+        `, [leadId, JSON.stringify({ meetingId, startTime, endTime })]);
 
-        return { success: true, meetingId: result.lastInsertRowid };
+        return { success: true, meetingId };
     } catch (error) {
         console.error('Booking Error:', error);
         return { success: false, error: error.message };
@@ -121,11 +127,12 @@ function bookMeeting(params) {
 /**
  * Get meetings for a lead
  */
-function getMeetingsForLead(leadId) {
+async function getMeetingsForLead(leadId) {
     try {
-        return db.prepare(`
-            SELECT * FROM meetings WHERE lead_id = ? ORDER BY start_time ASC
-        `).all(leadId);
+        const res = await query(`
+            SELECT * FROM meetings WHERE lead_id = $1 ORDER BY start_time ASC
+        `, [leadId]);
+        return res.rows;
     } catch (error) {
         return [];
     }
@@ -134,16 +141,17 @@ function getMeetingsForLead(leadId) {
 /**
  * Get all upcoming meetings
  */
-function getUpcomingMeetings() {
+async function getUpcomingMeetings() {
     try {
-        return db.prepare(`
+        const res = await query(`
             SELECT m.*, l.name as lead_name, l.email as lead_email
             FROM meetings m
             LEFT JOIN leads l ON m.lead_id = l.id
-            WHERE m.start_time > datetime('now')
+            WHERE m.start_time > CURRENT_TIMESTAMP
             AND m.status = 'SCHEDULED'
             ORDER BY m.start_time ASC
-        `).all();
+        `);
+        return res.rows;
     } catch (error) {
         return [];
     }

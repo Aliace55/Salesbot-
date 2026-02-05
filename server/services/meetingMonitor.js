@@ -4,7 +4,7 @@
  */
 
 const { searchEmails, extractEmail } = require('./imapClient');
-const { db } = require('../db');
+const { query } = require('../db');
 
 /**
  * Scan for meeting confirmations
@@ -75,7 +75,8 @@ async function processMeetings() {
 
         for (const meeting of meetings) {
             // Check if this email belongs to a lead
-            const lead = db.prepare('SELECT * FROM leads WHERE LOWER(email) = ?').get(meeting.email);
+            const result = await query('SELECT * FROM leads WHERE LOWER(email) = $1', [meeting.email]);
+            const lead = result.rows[0];
 
             if (lead) {
                 // If already marked, skip
@@ -84,27 +85,24 @@ async function processMeetings() {
                 console.log(`[Meeting Monitor] Detected meeting for lead ${lead.name} (${lead.email})`);
 
                 // Update lead status
-                db.prepare(`
+                await query(`
                     UPDATE leads 
                     SET status = 'MEETING_BOOKED',
-                        notes = COALESCE(notes, '') || '\n[AUTO] Meeting detected via ' || ?
-                    WHERE id = ?
-                `).run(meeting.source, lead.id);
-
-                // Stop automation (redundant if checking status, but good for safety)
-                // In sequenceEngine, we should respect MEETING_BOOKED
+                        notes = COALESCE(notes, '') || '\n[AUTO] Meeting detected via ' || $1
+                    WHERE id = $2
+                `, [meeting.source, lead.id]);
 
                 // Create Task for User
-                db.prepare(`
+                await query(`
                     INSERT INTO tasks (lead_id, type, title, description, due_date, status)
-                    VALUES (?, 'MEETING', 'Meeting Booked', ?, datetime('now'), 'PENDING')
-                `).run(lead.id, `Detected from: ${meeting.subject}`);
+                    VALUES ($1, 'MEETING', 'Meeting Booked', $2, CURRENT_TIMESTAMP, 'PENDING')
+                `, [lead.id, `Detected from: ${meeting.subject}`]);
 
                 // Log event
-                db.prepare(`
+                await query(`
                     INSERT INTO events (lead_id, type, metadata)
-                    VALUES (?, 'MEETING_DETECTED', ?)
-                `).run(lead.id, JSON.stringify(meeting));
+                    VALUES ($1, 'MEETING_DETECTED', $2)
+                `, [lead.id, JSON.stringify(meeting)]);
 
                 processed++;
             }

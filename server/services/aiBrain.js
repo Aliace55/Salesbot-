@@ -1,4 +1,4 @@
-const { db } = require('../db');
+const { query } = require('../db');
 const funnelAI = require('./funnelAI');
 const aiClassifier = require('./aiClassifier');
 const bounceMonitor = require('./bounceMonitor');
@@ -61,7 +61,7 @@ class AiBrain {
             const result = await meetingMonitor.processMeetings();
 
             if (result.processed > 0) {
-                this.logActivity(
+                await this.logActivity(
                     'INSIGHT',
                     'HIGH',
                     `Meetings Detected: ${result.processed} New Bookings`,
@@ -82,7 +82,7 @@ class AiBrain {
             const result = await bounceMonitor.processBounces();
 
             if (result.processed > 0) {
-                this.logActivity(
+                await this.logActivity(
                     'INSIGHT',
                     result.processed >= 5 ? 'HIGH' : 'MEDIUM',
                     `Email Hygiene: ${result.processed} Invalid Emails Removed`,
@@ -99,30 +99,36 @@ class AiBrain {
      * Check for leads that are going cold
      */
     async checkStaleLeads() {
-        const leads = db.prepare("SELECT * FROM leads WHERE status != 'LOST' AND status != 'WON'").all();
+        try {
+            const leadsRes = await query("SELECT * FROM leads WHERE status != 'LOST' AND status != 'WON'");
+            const leads = leadsRes.rows;
 
-        for (const lead of leads) {
-            const warning = funnelAI.getLeadWarning(lead);
-            if (warning) {
-                // Check if we already alerted recently (prevent spam)
-                const existing = db.prepare(`
-                    SELECT * FROM ai_activities 
-                    WHERE type = 'ACTION_REQUIRED' 
-                    AND title LIKE 'Lead Going Cold: %' 
-                    AND created_at > datetime('now', '-24 hours')
-                    AND metadata LIKE ?
-                `).get(`%${lead.id}%`);
+            for (const lead of leads) {
+                const warning = funnelAI.getLeadWarning(lead);
+                if (warning) {
+                    // Check if we already alerted recently (prevent spam)
+                    const existingRes = await query(`
+                        SELECT * FROM ai_activities 
+                        WHERE type = 'ACTION_REQUIRED' 
+                        AND title LIKE 'Lead Going Cold: %' 
+                        AND created_at > NOW() - INTERVAL '24 hours'
+                        AND metadata LIKE $1
+                    `, [`%${lead.id}%`]);
+                    const existing = existingRes.rows[0];
 
-                if (!existing) {
-                    this.logActivity(
-                        'ACTION_REQUIRED',
-                        warning.severity === 'CRITICAL' ? 'HIGH' : 'MEDIUM',
-                        `Lead Going Cold: ${lead.name}`,
-                        `${warning.message}. Suggested action: Send re-engagement email.`,
-                        { leadId: lead.id, action: 'SEND_RE_ENGAGEMENT' }
-                    );
+                    if (!existing) {
+                        await this.logActivity(
+                            'ACTION_REQUIRED',
+                            warning.severity === 'CRITICAL' ? 'HIGH' : 'MEDIUM',
+                            `Lead Going Cold: ${lead.name}`,
+                            `${warning.message}. Suggested action: Send re-engagement email.`,
+                            { leadId: lead.id, action: 'SEND_RE_ENGAGEMENT' }
+                        );
+                    }
                 }
             }
+        } catch (err) {
+            console.error('[AI BRAIN] Error checking stale leads:', err);
         }
     }
 
@@ -135,9 +141,10 @@ class AiBrain {
         // For now, we'll log a system heartbeat
         const hour = new Date().getHours();
         if (hour === 9) { // Daily Morning Brief
-            const existing = db.prepare("SELECT * FROM ai_activities WHERE title = 'Daily System Health Check' AND created_at > datetime('now', '-12 hours')").get();
+            const existingRes = await query("SELECT * FROM ai_activities WHERE title = 'Daily System Health Check' AND created_at > NOW() - INTERVAL '12 hours'");
+            const existing = existingRes.rows[0];
             if (!existing) {
-                this.logActivity('SYSTEM_LOG', 'LOW', 'Daily System Health Check', 'All systems operational. Database integrity verified.', {});
+                await this.logActivity('SYSTEM_LOG', 'LOW', 'Daily System Health Check', 'All systems operational. Database integrity verified.', {});
             }
         }
     }
@@ -147,7 +154,8 @@ class AiBrain {
      * @param {number} activityId 
      */
     async executeAction(activityId) {
-        const activity = db.prepare('SELECT * FROM ai_activities WHERE id = ?').get(activityId);
+        const activityRes = await query('SELECT * FROM ai_activities WHERE id = $1', [activityId]);
+        const activity = activityRes.rows[0];
         if (!activity) throw new Error('Activity not found');
 
         const metadata = JSON.parse(activity.metadata || '{}');
@@ -156,7 +164,8 @@ class AiBrain {
         console.log(`[AI BRAIN] Executing Action: ${action} for Lead ${leadId}`);
 
         if (action === 'SEND_RE_ENGAGEMENT' && leadId) {
-            const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
+            const leadRes = await query('SELECT * FROM leads WHERE id = $1', [leadId]);
+            const lead = leadRes.rows[0];
             if (!lead) throw new Error('Lead not found');
 
             // 1. Generate Email
@@ -164,16 +173,16 @@ class AiBrain {
             const message = await aiClassifier.personalizeMessage(lead, template, 'EMAIL');
 
             // 2. "Send" Email (Log to messages)
-            db.prepare(`
+            await query(`
                 INSERT INTO messages (lead_id, type, direction, content)
-                VALUES (?, 'EMAIL', 'OUTBOUND', ?)
-            `).run(leadId, message);
+                VALUES ($1, 'EMAIL', 'OUTBOUND', $2)
+            `, [leadId, message]);
 
             // 3. Update Lead
-            db.prepare("UPDATE leads SET last_contacted_at = CURRENT_TIMESTAMP WHERE id = ?").run(leadId);
+            await query("UPDATE leads SET last_contacted_at = CURRENT_TIMESTAMP WHERE id = $1", [leadId]);
 
             // 4. Log Completion
-            this.logActivity(
+            await this.logActivity(
                 'SYSTEM_LOG',
                 'LOW',
                 `Re-engagement Sent: ${lead.name}`,
@@ -188,13 +197,13 @@ class AiBrain {
     /**
      * Helper to log activity to DB
      */
-    logActivity(type, severity, title, description, metadata = {}) {
+    async logActivity(type, severity, title, description, metadata = {}) {
         try {
             console.log(`[AI LOG] [${type}] ${title}`);
-            db.prepare(`
+            await query(`
                 INSERT INTO ai_activities (type, severity, title, description, metadata, status) 
-                VALUES (?, ?, ?, ?, ?, 'PENDING')
-            `).run(type, severity, title, description, JSON.stringify(metadata));
+                VALUES ($1, $2, $3, $4, $5, 'PENDING')
+            `, [type, severity, title, description, JSON.stringify(metadata)]);
         } catch (e) {
             console.error('Failed to log AI activity:', e);
         }

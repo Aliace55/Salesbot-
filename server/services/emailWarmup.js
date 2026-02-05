@@ -3,7 +3,7 @@
  * Gradually increases sending volume to build sender reputation
  */
 
-const { db } = require('../db');
+const { query } = require('../db');
 
 // Configuration
 const WARMUP_SCHEDULE = [
@@ -25,14 +25,15 @@ const MIN_DELAY_BETWEEN_SENDS = 60000; // 1 minute
 /**
  * Get the current warmup status
  */
-function getWarmupStatus() {
+async function getWarmupStatus() {
     try {
         // Check when warmup started
-        const firstEmail = db.prepare(`
+        const firstEmailRes = await query(`
             SELECT MIN(created_at) as first_sent 
             FROM messages 
             WHERE type = 'EMAIL' AND direction = 'OUTBOUND'
-        `).get();
+        `);
+        const firstEmail = firstEmailRes.rows[0];
 
         if (!firstEmail?.first_sent) {
             return { status: 'NOT_STARTED', day: 0, maxSends: 5, sent: 0 };
@@ -51,12 +52,16 @@ function getWarmupStatus() {
         }
 
         // Count emails sent today
-        const todaySent = db.prepare(`
+        const todaySentRes = await query(`
             SELECT COUNT(*) as count 
             FROM messages 
             WHERE type = 'EMAIL' AND direction = 'OUTBOUND'
-            AND date(created_at) = date('now')
-        `).get().count;
+            AND date(created_at) = CURRENT_DATE
+        `);
+        // Postgres date(created_at) works. CURRENT_DATE is Postgres standard.
+        // Also date(created_at) = date('now') works in SQLite, in Postgres it's CURRENT_DATE or NOW()::date.
+
+        const todaySent = parseInt(todaySentRes.rows[0].count);
 
         return {
             status: daysDiff > 30 ? 'WARMED_UP' : 'WARMING',
@@ -74,16 +79,16 @@ function getWarmupStatus() {
 /**
  * Check if we can send another email today
  */
-function canSendEmail() {
-    const status = getWarmupStatus();
+async function canSendEmail() {
+    const status = await getWarmupStatus();
     return status.remaining > 0;
 }
 
 /**
  * Get recommended delay before next send (ms)
  */
-function getRecommendedDelay() {
-    const status = getWarmupStatus();
+async function getRecommendedDelay() {
+    const status = await getWarmupStatus();
 
     // If no more sends allowed, return very large number
     if (status.remaining <= 0) {
@@ -110,8 +115,8 @@ function getRecommendedDelay() {
  * Check sending limits and apply throttling
  * @returns {object} { canSend: boolean, delay: number, reason?: string }
  */
-function checkSendingLimits() {
-    const status = getWarmupStatus();
+async function checkSendingLimits() {
+    const status = await getWarmupStatus();
 
     if (status.status === 'ERROR') {
         return { canSend: false, delay: 0, reason: 'Error checking limits' };
@@ -126,13 +131,14 @@ function checkSendingLimits() {
     }
 
     // Check time since last send
-    const lastSend = db.prepare(`
+    const lastSendRes = await query(`
         SELECT created_at 
         FROM messages 
         WHERE type = 'EMAIL' AND direction = 'OUTBOUND'
         ORDER BY created_at DESC 
         LIMIT 1
-    `).get();
+    `);
+    const lastSend = lastSendRes.rows[0];
 
     if (lastSend) {
         const timeSince = Date.now() - new Date(lastSend.created_at).getTime();
@@ -145,31 +151,25 @@ function checkSendingLimits() {
         }
     }
 
-    return { canSend: true, delay: getRecommendedDelay() };
+    return { canSend: true, delay: await getRecommendedDelay() }; // Actually getRecommendedDelay calls getWarmupStatus again. slightly inefficient but robust.
 }
 
 /**
  * Analyze email health metrics
  */
-function getEmailHealth() {
+async function getEmailHealth() {
     try {
-        const totalSent = db.prepare(`
-            SELECT COUNT(*) as count FROM messages 
-            WHERE type = 'EMAIL' AND direction = 'OUTBOUND'
-        `).get().count;
+        const [totalSentRes, bouncesRes, opensRes, repliesRes] = await Promise.all([
+            query("SELECT COUNT(*) as count FROM messages WHERE type = 'EMAIL' AND direction = 'OUTBOUND'"),
+            query("SELECT COUNT(*) as count FROM events WHERE type = 'EMAIL_BOUNCE'"),
+            query("SELECT COUNT(DISTINCT lead_id) as count FROM events WHERE type = 'EMAIL_OPEN'"),
+            query("SELECT COUNT(*) as count FROM messages WHERE type = 'EMAIL' AND direction = 'INBOUND'")
+        ]);
 
-        const bounces = db.prepare(`
-            SELECT COUNT(*) as count FROM events WHERE type = 'EMAIL_BOUNCE'
-        `).get().count;
-
-        const opens = db.prepare(`
-            SELECT COUNT(DISTINCT lead_id) as count FROM events WHERE type = 'EMAIL_OPEN'
-        `).get().count;
-
-        const replies = db.prepare(`
-            SELECT COUNT(*) as count FROM messages 
-            WHERE type = 'EMAIL' AND direction = 'INBOUND'
-        `).get().count;
+        const totalSent = parseInt(totalSentRes.rows[0].count);
+        const bounces = parseInt(bouncesRes.rows[0].count);
+        const opens = parseInt(opensRes.rows[0].count);
+        const replies = parseInt(repliesRes.rows[0].count);
 
         const bounceRate = totalSent > 0 ? ((bounces / totalSent) * 100).toFixed(1) : 0;
         const openRate = totalSent > 0 ? ((opens / totalSent) * 100).toFixed(1) : 0;

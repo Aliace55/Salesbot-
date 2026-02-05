@@ -3,7 +3,7 @@
  * Scans Gmail inbox via IMAP for bounced email notifications and marks leads as invalid
  */
 
-const { db } = require('../db');
+const { query } = require('../db');
 const { searchEmails, extractEmail } = require('./imapClient');
 
 /**
@@ -134,25 +134,26 @@ async function processBounces() {
         for (const bounce of bounces) {
             try {
                 // Find the lead
-                const lead = db.prepare('SELECT * FROM leads WHERE LOWER(email) = ?').get(bounce.email);
+                const result = await query('SELECT * FROM leads WHERE LOWER(email) = $1', [bounce.email]);
+                const lead = result.rows[0];
 
                 if (lead) {
                     // Check if already marked
                     if (lead.status === 'INVALID_EMAIL') continue;
 
                     // Mark lead as invalid
-                    db.prepare(`
+                    await query(`
                         UPDATE leads 
                         SET status = 'INVALID_EMAIL', 
-                            notes = COALESCE(notes, '') || '\n[AUTO] Email bounced: ' || ?
-                        WHERE id = ?
-                    `).run(bounce.type, lead.id);
+                            notes = COALESCE(notes, '') || '\n[AUTO] Email bounced: ' || $1
+                        WHERE id = $2
+                    `, [bounce.type, lead.id]);
 
                     // Log bounce event
-                    db.prepare(`
+                    await query(`
                         INSERT INTO events (lead_id, type, metadata)
-                        VALUES (?, 'EMAIL_BOUNCE', ?)
-                    `).run(lead.id, JSON.stringify({ type: bounce.type, email: bounce.email }));
+                        VALUES ($1, 'EMAIL_BOUNCE', $2)
+                    `, [lead.id, JSON.stringify({ type: bounce.type, email: bounce.email })]);
 
                     console.log(`[Bounce Monitor] Marked lead ${lead.id} (${lead.name}) as INVALID_EMAIL`);
                     processed++;

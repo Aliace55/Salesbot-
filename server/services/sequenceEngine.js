@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { db } = require('../db');
+const { query } = require('../db');
 const { fetchLeadsFromSheet } = require('./googleSheets');
 const { sendSMS } = require('./quoHandler'); // A2P compliant via Quo
 const { sendEmail } = require('./emailHandler');
@@ -78,15 +78,16 @@ function wrapLinks(text, leadId) {
 }
 
 // Helper: Select A/B Variant
-function selectVariant(stepConfig, leadId) {
+async function selectVariant(stepConfig, leadId) {
     if (!stepConfig.variants || stepConfig.variants.length === 0) {
         return { variant: null, content: stepConfig.content };
     }
 
     // Check if lead already has a variant for this step
-    const existing = db.prepare(`
-        SELECT variant FROM ab_tests WHERE step_id = ? AND lead_id = ?
-    `).get(stepConfig.id, leadId);
+    const existingRes = await query(`
+        SELECT variant FROM ab_tests WHERE step_id = $1 AND lead_id = $2
+    `, [stepConfig.id, leadId]);
+    const existing = existingRes.rows[0];
 
     if (existing) {
         const variant = stepConfig.variants.find(v => v.name === existing.variant);
@@ -98,59 +99,65 @@ function selectVariant(stepConfig, leadId) {
     const selected = stepConfig.variants[randomIndex];
 
     // Store selection
-    db.prepare(`
-        INSERT INTO ab_tests (step_id, lead_id, variant) VALUES (?, ?, ?)
-    `).run(stepConfig.id, leadId, selected.name);
+    await query(`
+        INSERT INTO ab_tests (step_id, lead_id, variant) VALUES ($1, $2, $3)
+    `, [stepConfig.id, leadId, selected.name]);
 
     return { variant: selected.name, content: selected.content };
 }
 
 // Helper: Check Conditions
-function checkCondition(condition, lead, steps) {
+async function checkCondition(condition, lead, steps) {
     if (!condition) return true;
 
     const { if: ifCondition, else: elseAction } = condition;
 
     // Check if previous step replied
     if (ifCondition.previous_step_replied === false) {
-        const hasReply = db.prepare(`
+        const hasReplyRes = await query(`
             SELECT COUNT(*) as count FROM messages 
-            WHERE lead_id = ? AND direction = 'INBOUND'
-        `).get(lead.id);
-        if (hasReply.count > 0) {
+            WHERE lead_id = $1 AND direction = 'INBOUND'
+        `, [lead.id]);
+        const hasReplyCount = parseInt(hasReplyRes.rows[0].count);
+
+        if (hasReplyCount > 0) {
             return elseAction === 'skip' ? false : true;
         }
     }
 
     // Check if email was opened
     if (ifCondition.email_opened === true) {
-        const hasOpen = db.prepare(`
+        const hasOpenRes = await query(`
             SELECT COUNT(*) as count FROM events 
-            WHERE lead_id = ? AND type = 'EMAIL_OPEN'
-        `).get(lead.id);
-        if (hasOpen.count === 0) {
+            WHERE lead_id = $1 AND type = 'EMAIL_OPEN'
+        `, [lead.id]);
+        const hasOpenCount = parseInt(hasOpenRes.rows[0].count);
+
+        if (hasOpenCount === 0) {
             return false; // Skip this step
         }
     }
 
     // Check if interested
     if (ifCondition.interested === true) {
-        const classification = db.prepare(`
+        const classificationRes = await query(`
             SELECT classification FROM messages 
-            WHERE lead_id = ? AND classification = 'INTERESTED' LIMIT 1
-        `).get(lead.id);
-        if (!classification) {
+            WHERE lead_id = $1 AND classification = 'INTERESTED' LIMIT 1
+        `, [lead.id]);
+        if (classificationRes.rows.length === 0) {
             return false;
         }
     }
 
     // Check no response after certain steps
     if (ifCondition.no_response_after_steps) {
-        const hasReply = db.prepare(`
+        const hasReplyRes = await query(`
             SELECT COUNT(*) as count FROM messages 
-            WHERE lead_id = ? AND direction = 'INBOUND'
-        `).get(lead.id);
-        if (hasReply.count > 0) {
+            WHERE lead_id = $1 AND direction = 'INBOUND'
+        `, [lead.id]);
+        const count = parseInt(hasReplyRes.rows[0].count);
+
+        if (count > 0) {
             return false; // Has responded, skip this
         }
     }
@@ -167,24 +174,33 @@ async function runSequence() {
     console.log(`Debug: Fetched ${sheetLeads.length} leads from service.`);
 
     let newCount = 0;
-    const insertStmt = db.prepare(`
-        INSERT OR IGNORE INTO leads (name, phone, email, product_interest, status, step, created_at)
-        VALUES (?, ?, ?, ?, 'NEW', 0, CURRENT_TIMESTAMP)
-    `);
+    // Postgres UPSERT: ON CONFLICT DO NOTHING
 
-    sheetLeads.forEach(lead => {
+    for (const lead of sheetLeads) {
         const phone = lead.phone ? lead.phone.toString().replace(/\D/g, '') : null;
         if (phone) {
             const formattedPhone = phone.length === 10 ? `+1${phone}` : `+${phone}`;
-            const info = insertStmt.run(lead.name, formattedPhone, lead.email, lead.product_interest);
-            if (info.changes > 0) newCount++;
+
+            // Try insert
+            try {
+                const res = await query(`
+                    INSERT INTO leads (name, phone, email, product_interest, status, step, created_at)
+                    VALUES ($1, $2, $3, $4, 'NEW', 0, CURRENT_TIMESTAMP)
+                    ON CONFLICT (phone) DO NOTHING
+                `, [lead.name, formattedPhone, lead.email, lead.product_interest]);
+
+                if (res.rowCount > 0) newCount++;
+            } catch (err) {
+                console.error("Error inserting lead:", err);
+            }
         }
-    });
+    }
 
     if (newCount > 0) console.log(`Imported ${newCount} new leads.`);
 
     // 2. Process Leads
-    const leads = db.prepare("SELECT * FROM leads WHERE status IN ('NEW', 'ACTIVE') AND status NOT IN ('OPTED_OUT', 'INVALID_EMAIL', 'BOUNCED')").all();
+    const leadsRes = await query("SELECT * FROM leads WHERE status IN ('NEW', 'ACTIVE') AND status NOT IN ('OPTED_OUT', 'INVALID_EMAIL', 'BOUNCED')");
+    const leads = leadsRes.rows;
 
     for (const lead of leads) {
         await processLead(lead, steps);
@@ -197,16 +213,16 @@ async function processLead(lead, steps) {
 
     if (!stepConfig) {
         if (lead.step > 0 && nextStepNum > steps.length) {
-            db.prepare("UPDATE leads SET status = 'COMPLETED' WHERE id = ?").run(lead.id);
+            await query("UPDATE leads SET status = 'COMPLETED' WHERE id = $1", [lead.id]);
         }
         return;
     }
 
     // Check Conditions
-    if (!checkCondition(stepConfig.condition, lead, steps)) {
+    if (!(await checkCondition(stepConfig.condition, lead, steps))) {
         console.log(`Skipping Step ${nextStepNum} for ${lead.name} (condition not met)`);
         // Advance to next step
-        db.prepare(`UPDATE leads SET step = ? WHERE id = ?`).run(nextStepNum, lead.id);
+        await query(`UPDATE leads SET step = $1 WHERE id = $2`, [nextStepNum, lead.id]);
         return;
     }
 
@@ -230,12 +246,12 @@ async function processLead(lead, steps) {
         let result = { success: false };
 
         // A/B Testing: Select Variant
-        const { variant, content } = selectVariant(stepConfig, lead.id);
+        const { variant, content } = await selectVariant(stepConfig, lead.id);
 
         // ADAPTIVE MESSAGING: Check if lead has context/replies
         let finalContent = content;
         try {
-            const context = buildContextForAI(lead.id);
+            const context = await buildContextForAI(lead.id); // Now async
             if (context && context.hasReplied) {
                 console.log(`[Adaptive] Lead ${lead.name} has replied - adapting message`);
                 const adapted = await adaptSequenceMessage(content, lead.id, stepConfig.type);
@@ -256,7 +272,7 @@ async function processLead(lead, steps) {
         }
         else if (stepConfig.type === 'EMAIL') {
             // Check warmup limits before sending
-            const limits = emailWarmup.checkSendingLimits();
+            const limits = await emailWarmup.checkSendingLimits(); // Now async
             if (!limits.canSend) {
                 console.log(`[RATE LIMIT] Skipping email for ${lead.name}: ${limits.reason}`);
                 return; // Don't send, don't advance - will retry next cycle
@@ -273,10 +289,11 @@ async function processLead(lead, steps) {
         }
         else {
             // Manual (LinkedIn/Call) - Create a task
-            db.prepare(`
+            await query(`
                 INSERT INTO tasks (lead_id, type, title, description, due_date, status)
-                VALUES (?, ?, ?, ?, datetime('now', '+1 day'), 'PENDING')
-            `).run(lead.id, stepConfig.type, `${stepConfig.type} Task`, stepConfig.description || filledContent);
+                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '1 day', 'PENDING')
+            `, [lead.id, stepConfig.type, `${stepConfig.type} Task`, stepConfig.description || filledContent]);
+            // interval syntax for postgres: CURRENT_TIMESTAMP + INTERVAL '1 day'
 
             result = { success: true, manual: true };
         }
@@ -285,16 +302,16 @@ async function processLead(lead, steps) {
         if (result.success) {
             const newStatus = result.manual ? 'MANUAL_TASK_DUE' : 'ACTIVE';
 
-            db.prepare(`
-                UPDATE leads SET status = ?, step = ?, last_contacted_at = CURRENT_TIMESTAMP WHERE id = ?
-            `).run(newStatus, nextStepNum, lead.id);
+            await query(`
+                UPDATE leads SET status = $1, step = $2, last_contacted_at = CURRENT_TIMESTAMP WHERE id = $3
+            `, [newStatus, nextStepNum, lead.id]);
 
             // Log Message (if automated) with variant
             if (!result.manual) {
-                db.prepare(`
+                await query(`
                     INSERT INTO messages (lead_id, type, direction, content, variant)
-                    VALUES (?, ?, 'OUTBOUND', ?, ?)
-                `).run(lead.id, stepConfig.type, filledContent, variant);
+                    VALUES ($1, $2, 'OUTBOUND', $3, $4)
+                `, [lead.id, stepConfig.type, filledContent, variant]);
             }
         }
     }
