@@ -31,6 +31,7 @@ export default function Companies() {
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [sortBy, setSortBy] = useState('created_at');
     const [sortOrder, setSortOrder] = useState('desc');
+    const [showFilters, setShowFilters] = useState(false);
 
     // Detail View State
     const [selectedCompany, setSelectedCompany] = useState(null);
@@ -123,7 +124,10 @@ export default function Companies() {
                             {companies.length} records
                         </span>
                         <div className="h-6 w-px bg-slate-700/50 mx-2" />
-                        <button className="flex items-center space-x-1 text-slate-400 hover:text-white text-sm">
+                        <button
+                            onClick={() => setShowFilters(!showFilters)}
+                            className={`flex items-center space-x-1 text-sm transition-colors ${showFilters ? 'text-blue-400' : 'text-slate-400 hover:text-white'}`}
+                        >
                             <Filter size={14} />
                             <span>Advanced Filters</span>
                         </button>
@@ -146,6 +150,38 @@ export default function Companies() {
                         </button>
                     </div>
                 </div>
+
+                {/* Filters Panel */}
+                {showFilters && (
+                    <div className="px-6 py-3 bg-slate-800/50 border-b border-slate-700/50 flex flex-wrap gap-4 animate-in slide-in-from-top-2">
+                        <div className="flex flex-col space-y-1">
+                            <label className="text-xs text-slate-500 font-medium">Industry</label>
+                            <select className="bg-slate-800 border border-slate-700 rounded-lg text-xs text-white px-2 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none">
+                                <option>All Industries</option>
+                                <option>Technology</option>
+                                <option>Manufacturing</option>
+                                <option>Healthcare</option>
+                            </select>
+                        </div>
+                        <div className="flex flex-col space-y-1">
+                            <label className="text-xs text-slate-500 font-medium">Revenue</label>
+                            <select className="bg-slate-800 border border-slate-700 rounded-lg text-xs text-white px-2 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none">
+                                <option>Any</option>
+                                <option>$1M - $10M</option>
+                                <option>$10M - $50M</option>
+                                <option>$50M+</option>
+                            </select>
+                        </div>
+                        <div className="flex flex-col space-y-1">
+                            <label className="text-xs text-slate-500 font-medium">City</label>
+                            <input
+                                type="text"
+                                placeholder="City..."
+                                className="bg-slate-800 border border-slate-700 rounded-lg text-xs text-white px-2 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none w-32"
+                            />
+                        </div>
+                    </div>
+                )}
 
                 {/* Table Component */}
                 <div className="flex-1 p-6 overflow-hidden">
