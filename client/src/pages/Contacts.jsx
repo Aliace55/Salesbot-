@@ -39,8 +39,6 @@ export default function Contacts() {
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [sortBy, setSortBy] = useState('created_at');
     const [sortOrder, setSortOrder] = useState('desc');
-    const [sortBy, setSortBy] = useState('created_at');
-    const [sortOrder, setSortOrder] = useState('desc');
     const [filters, setFilters] = useState({});
     const [searchQuery, setSearchQuery] = useState('');
 
