@@ -99,8 +99,14 @@ app.get('/api/health', (req, res) => {
 app.post('/api/sync', async (req, res) => {
     console.log('Manual sync triggered via API');
     try {
+        // Run Sheet Sync (Inbound/Outbound)
+        const { runFullSync } = require('./services/sheetSync');
+        await runFullSync();
+
+        // Run Sequence Engine
         await runSequence();
-        res.json({ success: true, message: 'Sequence run complete' });
+
+        res.json({ success: true, message: 'Sync and Sequence run complete' });
     } catch (err) {
         console.error(err);
         res.status(500).json({ success: false, error: err.message });
