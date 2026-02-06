@@ -35,6 +35,7 @@ export default function Companies() {
     const [filterIndustry, setFilterIndustry] = useState('All Industries');
     const [filterRevenue, setFilterRevenue] = useState('Any');
     const [filterCity, setFilterCity] = useState('');
+    const [searchQuery, setSearchQuery] = useState('');
 
     // Detail View State
     const [selectedCompany, setSelectedCompany] = useState(null);
@@ -114,6 +115,18 @@ export default function Companies() {
 
     // Filtering Logic
     const filteredCompanies = companies.filter(company => {
+        // Global Search
+        if (searchQuery) {
+            const q = searchQuery.toLowerCase();
+            const matches = (
+                (company.name && company.name.toLowerCase().includes(q)) ||
+                (company.domain && company.domain.toLowerCase().includes(q)) ||
+                (company.industry && company.industry.toLowerCase().includes(q)) ||
+                (company.city && company.city.toLowerCase().includes(q))
+            );
+            if (!matches) return false;
+        }
+
         // Industry Filter
         if (filterIndustry !== 'All Industries' && company.industry !== filterIndustry) return false;
 
@@ -155,6 +168,8 @@ export default function Companies() {
                             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                             <input
                                 type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
                                 placeholder="Search companies..."
                                 className="pl-9 pr-4 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white w-64 focus:ring-2 focus:ring-blue-500"
                             />
