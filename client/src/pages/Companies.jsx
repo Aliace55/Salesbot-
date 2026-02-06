@@ -8,6 +8,7 @@ import {
 import { useToast } from '../components/ToastProvider';
 import { CRMTable } from '../components/crm/CRMTable';
 import { ActivityTimeline } from '../components/crm/ActivityTimeline';
+import { EditableProperty } from '../components/crm/EditableProperty';
 
 // ========== CONFIGURATION ==========
 const DEFAULT_COLUMNS = [
@@ -85,6 +86,26 @@ export default function Companies() {
     const handleCreateNote = async (content) => {
         // Placeholder for company note creation
         toast.success("Note added to company");
+    };
+
+    const handleUpdateCompany = async (key, value) => {
+        if (!selectedCompany) return;
+        try {
+            const updates = { [key]: value };
+            // Optimistic update
+            const updatedCompany = { ...selectedCompany, ...updates };
+            setSelectedCompany(updatedCompany);
+
+            // Update in list
+            setCompanies(prev => prev.map(c => c.id === selectedCompany.id ? updatedCompany : c));
+
+            // Assuming /api/companies/:id supports PUT
+            await axios.put(`/api/companies/${selectedCompany.id}`, updates);
+            toast.success("Company updated");
+        } catch (err) {
+            console.error(err);
+            toast.error("Failed to update company");
+        }
     };
 
     return (
@@ -187,16 +208,17 @@ export default function Companies() {
                                     <section>
                                         <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">Company Details</h4>
                                         <div className="space-y-3">
-                                            <Property label="Domain" value={selectedCompany.domain} icon={Globe} isLink external />
-                                            <Property label="Phone" value={selectedCompany.phone} icon={Phone} />
-                                            <Property label="Industry" value={selectedCompany.industry} />
-                                            <Property label="City" value={selectedCompany.city} icon={MapPin} />
+                                            <EditableProperty label="Domain" value={selectedCompany.domain} name="domain" onSave={handleUpdateCompany} icon={Globe} isLink external />
+                                            <EditableProperty label="Phone" value={selectedCompany.phone} name="phone" onSave={handleUpdateCompany} icon={Phone} />
+                                            <EditableProperty label="Industry" value={selectedCompany.industry} name="industry" onSave={handleUpdateCompany} />
+                                            <EditableProperty label="City" value={selectedCompany.city} name="city" onSave={handleUpdateCompany} icon={MapPin} />
                                         </div>
                                     </section>
                                     <section>
                                         <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">Metrics</h4>
                                         <div className="space-y-3">
-                                            <Property label="Total Contacts" value={selectedCompany.lead_count} />
+                                            <EditableProperty label="Total Contacts" value={selectedCompany.lead_count} name="lead_count" onSave={() => { }} />
+                                            {/* Note: lead_count is likely read-only from backend aggregation, so maybe keep onSave empty or handle gracefully */}
                                         </div>
                                     </section>
                                 </div>

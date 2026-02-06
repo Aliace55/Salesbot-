@@ -12,6 +12,7 @@ import {
 import { useToast } from '../components/ToastProvider';
 import { CRMTable } from '../components/crm/CRMTable';
 import { ActivityTimeline } from '../components/crm/ActivityTimeline';
+import { EditableProperty } from '../components/crm/EditableProperty';
 
 // ========== CONFIGURATION ==========
 const DEFAULT_COLUMNS = [
@@ -114,6 +115,29 @@ export default function Contacts() {
             fetchActivity(selectedContact.id);
         } catch (err) {
             toast.error("Failed to add note");
+        }
+    };
+
+    const handleUpdateContact = async (key, value) => {
+        if (!selectedContact) return;
+        try {
+            const updates = { [key]: value };
+            // Optimistic update
+            const updatedContact = { ...selectedContact, ...updates };
+            setSelectedContact(updatedContact);
+
+            // Update in list
+            setContacts(prev => prev.map(c => c.id === selectedContact.id ? updatedContact : c));
+
+            await axios.put(`/api/contacts/${selectedContact.id}`, updates);
+            toast.success("Contact updated");
+
+            // Refresh in background to ensure sync
+            // fetchContacts(); 
+        } catch (err) {
+            console.error(err);
+            toast.error("Failed to update contact");
+            // Revert on failure would go here
         }
     };
 
@@ -228,26 +252,26 @@ export default function Contacts() {
                                     <section>
                                         <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">About this contact</h4>
                                         <div className="space-y-3">
-                                            <Property label="Email" value={selectedContact.email} icon={Mail} isLink />
-                                            <Property label="Phone" value={selectedContact.phone} icon={Phone} />
-                                            <Property label="Lifecycle Stage" value={selectedContact.status} badge />
-                                            <Property label="Owner" value={selectedContact.owner} />
+                                            <EditableProperty label="Email" value={selectedContact.email} name="email" onSave={handleUpdateContact} icon={Mail} isLink />
+                                            <EditableProperty label="Phone" value={selectedContact.phone} name="phone" onSave={handleUpdateContact} icon={Phone} />
+                                            <EditableProperty label="Lifecycle Stage" value={selectedContact.status} name="status" onSave={handleUpdateContact} badge />
+                                            <EditableProperty label="Owner" value={selectedContact.owner} name="owner" onSave={handleUpdateContact} />
                                         </div>
                                     </section>
                                     <section>
                                         <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">Professional Info</h4>
                                         <div className="space-y-3">
-                                            <Property label="Job Title" value={selectedContact.job_title} />
-                                            <Property label="Department" value={selectedContact.department} />
-                                            <Property label="LinkedIn" value={selectedContact.linkedin_url} isLink external />
+                                            <EditableProperty label="Job Title" value={selectedContact.job_title} name="job_title" onSave={handleUpdateContact} />
+                                            <EditableProperty label="Department" value={selectedContact.department} name="department" onSave={handleUpdateContact} />
+                                            <EditableProperty label="LinkedIn" value={selectedContact.linkedin_url} name="linkedin_url" onSave={handleUpdateContact} isLink external />
                                         </div>
                                     </section>
                                     <section>
                                         <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">Location</h4>
                                         <div className="space-y-3">
-                                            <Property label="City" value={selectedContact.city} />
-                                            <Property label="State" value={selectedContact.state} />
-                                            <Property label="Country" value={selectedContact.country} />
+                                            <EditableProperty label="City" value={selectedContact.city} name="city" onSave={handleUpdateContact} />
+                                            <EditableProperty label="State" value={selectedContact.state} name="state" onSave={handleUpdateContact} />
+                                            <EditableProperty label="Country" value={selectedContact.country} name="country" onSave={handleUpdateContact} />
                                         </div>
                                     </section>
                                 </div>
