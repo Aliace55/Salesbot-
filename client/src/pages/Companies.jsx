@@ -32,6 +32,9 @@ export default function Companies() {
     const [sortBy, setSortBy] = useState('created_at');
     const [sortOrder, setSortOrder] = useState('desc');
     const [showFilters, setShowFilters] = useState(false);
+    const [filterIndustry, setFilterIndustry] = useState('All Industries');
+    const [filterRevenue, setFilterRevenue] = useState('Any');
+    const [filterCity, setFilterCity] = useState('');
 
     // Detail View State
     const [selectedCompany, setSelectedCompany] = useState(null);
@@ -156,7 +159,11 @@ export default function Companies() {
                     <div className="px-6 py-3 bg-slate-800/50 border-b border-slate-700/50 flex flex-wrap gap-4 animate-in slide-in-from-top-2">
                         <div className="flex flex-col space-y-1">
                             <label className="text-xs text-slate-500 font-medium">Industry</label>
-                            <select className="bg-slate-800 border border-slate-700 rounded-lg text-xs text-white px-2 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none">
+                            <select
+                                value={filterIndustry}
+                                onChange={(e) => setFilterIndustry(e.target.value)}
+                                className="bg-slate-800 border border-slate-700 rounded-lg text-xs text-white px-2 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none"
+                            >
                                 <option>All Industries</option>
                                 <option>Technology</option>
                                 <option>Manufacturing</option>
@@ -165,7 +172,11 @@ export default function Companies() {
                         </div>
                         <div className="flex flex-col space-y-1">
                             <label className="text-xs text-slate-500 font-medium">Revenue</label>
-                            <select className="bg-slate-800 border border-slate-700 rounded-lg text-xs text-white px-2 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none">
+                            <select
+                                value={filterRevenue}
+                                onChange={(e) => setFilterRevenue(e.target.value)}
+                                className="bg-slate-800 border border-slate-700 rounded-lg text-xs text-white px-2 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none"
+                            >
                                 <option>Any</option>
                                 <option>$1M - $10M</option>
                                 <option>$10M - $50M</option>
@@ -176,6 +187,8 @@ export default function Companies() {
                             <label className="text-xs text-slate-500 font-medium">City</label>
                             <input
                                 type="text"
+                                value={filterCity}
+                                onChange={(e) => setFilterCity(e.target.value)}
                                 placeholder="City..."
                                 className="bg-slate-800 border border-slate-700 rounded-lg text-xs text-white px-2 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none w-32"
                             />
@@ -186,7 +199,7 @@ export default function Companies() {
                 {/* Table Component */}
                 <div className="flex-1 p-6 overflow-hidden">
                     <CRMTable
-                        data={companies}
+                        data={filteredCompanies}
                         columns={DEFAULT_COLUMNS}
                         selectedIds={selectedIds}
                         onSelect={(id) => {
