@@ -385,10 +385,12 @@ app.post('/api/leads', async (req, res) => {
         }
 
         // Send Notification Email
-        const normalizedSource = source ? source.toLowerCase() : '';
-        const validSources = ['google ads', 'facebook', 'website', 'google', 'facebook ads'];
+        const normalizedSource = source ? source.toLowerCase() : 'unknown';
+        // Expanded list + partial matching
+        const validSources = ['google', 'facebook', 'website', 'web', 'form', 'contact', 'ad', 'ads', 'unknown'];
+        const isValidSource = validSources.some(s => normalizedSource.includes(s));
 
-        if (validSources.includes(normalizedSource)) {
+        if (isValidSource || !source) {
             const { sendEmail } = require('./services/emailHandler');
             const alertHtml = `
                 <h2>New Lead Capture 🚀</h2>
