@@ -53,6 +53,7 @@ export default function Contacts() {
     // Modals
     const [showAddModal, setShowAddModal] = useState(false);
     const [newContact, setNewContact] = useState({});
+    const [showActionsMenu, setShowActionsMenu] = useState(false);
 
     useEffect(() => {
         fetchContacts();
@@ -265,10 +266,51 @@ export default function Contacts() {
                                     <h3 className="text-sm text-slate-400">{selectedContact.job_title} at {selectedContact.company}</h3>
                                 </div>
                             </div>
-                            <div className="flex items-center space-x-2">
-                                <button className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg">
-                                    <MoreHorizontal size={20} />
-                                </button>
+                            <div className="flex items-center space-x-2 relative">
+                                <div className="relative">
+                                    <button
+                                        onClick={() => setShowActionsMenu(!showActionsMenu)}
+                                        className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+                                    >
+                                        <MoreHorizontal size={20} />
+                                    </button>
+
+                                    {/* Actions Dropdown */}
+                                    {showActionsMenu && (
+                                        <div className="absolute right-0 mt-2 w-48 bg-[#1e293b] border border-slate-700 rounded-xl shadow-2xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200 origin-top-right">
+                                            <button
+                                                onClick={() => {
+                                                    handleViewCompany();
+                                                    setShowActionsMenu(false);
+                                                }}
+                                                className="w-full text-left px-4 py-2.5 text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition-colors flex items-center space-x-2 border-b border-slate-700/50"
+                                            >
+                                                <Building2 size={14} className="text-blue-400" />
+                                                <span>View Company</span>
+                                            </button>
+                                            <button
+                                                onClick={() => {
+                                                    handleMergeContact();
+                                                    setShowActionsMenu(false);
+                                                }}
+                                                className="w-full text-left px-4 py-2.5 text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition-colors flex items-center space-x-2"
+                                            >
+                                                <Users size={14} className="text-amber-400" />
+                                                <span>Merge Contact</span>
+                                            </button>
+                                            <button
+                                                onClick={() => {
+                                                    handleDeleteContact();
+                                                    setShowActionsMenu(false);
+                                                }}
+                                                className="w-full text-left px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors flex items-center space-x-2"
+                                            >
+                                                <Trash2 size={14} />
+                                                <span>Delete Contact</span>
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
                                 <button onClick={closeDetailPanel} className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg">
                                     <X size={20} />
                                 </button>
