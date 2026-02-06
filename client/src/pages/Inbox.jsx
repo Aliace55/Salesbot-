@@ -160,12 +160,11 @@ export default function Inbox() {
     };
 
     const handleEmail = () => {
-        if (!activeLead) return;
-        // Focus input and set placeholder/draft
-        messageInputRef.current?.focus();
-        if (!newMessage) {
-            setNewMessage(`Hi ${activeLead.name ? activeLead.name.split(' ')[0] : ''}, `);
+        if (!activeLead?.email) {
+            toast.error("No email address for this contact");
+            return;
         }
+        window.open(`mailto:${activeLead.email}`, '_blank');
     };
 
     const handleLinkedIn = () => {
