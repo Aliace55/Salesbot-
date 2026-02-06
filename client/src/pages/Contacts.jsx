@@ -39,7 +39,10 @@ export default function Contacts() {
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [sortBy, setSortBy] = useState('created_at');
     const [sortOrder, setSortOrder] = useState('desc');
+    const [sortBy, setSortBy] = useState('created_at');
+    const [sortOrder, setSortOrder] = useState('desc');
     const [filters, setFilters] = useState({});
+    const [searchQuery, setSearchQuery] = useState('');
 
     // Detail View State
     const [selectedContact, setSelectedContact] = useState(null);
@@ -161,7 +164,16 @@ export default function Contacts() {
     };
 
     // Filter Logic
-    const filteredContacts = contacts.sort((a, b) => {
+    const filteredContacts = contacts.filter(contact => {
+        if (!searchQuery) return true;
+        const q = searchQuery.toLowerCase();
+        return (
+            (contact.name && contact.name.toLowerCase().includes(q)) ||
+            (contact.email && contact.email.toLowerCase().includes(q)) ||
+            (contact.company && contact.company.toLowerCase().includes(q)) ||
+            (contact.phone && contact.phone.includes(q))
+        );
+    }).sort((a, b) => {
         const aVal = a[sortBy] || '';
         const bVal = b[sortBy] || '';
         if (sortBy.includes('date') || sortBy.includes('_at')) {
@@ -200,6 +212,8 @@ export default function Contacts() {
                             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                             <input
                                 type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
                                 placeholder="Search contacts..."
                                 className="pl-9 pr-4 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white w-64 focus:ring-2 focus:ring-blue-500"
                             />
