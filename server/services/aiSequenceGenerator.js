@@ -62,48 +62,48 @@ Ensure all messages are personalized with {{firstName}}, {{company}}, or {{indus
 Return ONLY the JSON array, no explanations.`;
 
     try {
-        try {
-            const response = await callSmartModel({
-                prompt: prompt,
-                systemPrompt: 'You are a sales sequence generator. Return only valid JSON.',
-                complexity: 'high', // Use GPT-4o for strategy
-                outputFormat: 'json',
-                temperature: 0.7
-            });
+        const response = await callSmartModel({
+            prompt: prompt,
+            systemPrompt: 'You are a sales sequence generator. Return only valid JSON.',
+            complexity: 'high', // Use GPT-4o for strategy
+            outputFormat: 'json',
+            temperature: 0.7
+        });
 
-            // Response is already parsed object if outputFormat is json
-            const parsed = response;
+        // Response is already parsed object if outputFormat is json
+        // If the model wrapper returns null/undefined on error it would be caught below
+        const parsed = response;
 
-            // Handle if response is wrapped in an object
-            const sequence = Array.isArray(parsed) ? parsed : parsed.sequence || parsed.steps || [];
+        // Handle if response is wrapped in an object
+        const sequence = Array.isArray(parsed) ? parsed : parsed.sequence || parsed.steps || [];
 
-            return { success: true, sequence };
-        } catch (error) {
-            console.error('Sequence Generation Error:', error);
-            return { success: false, error: error.message };
-        }
+        return { success: true, sequence };
+    } catch (error) {
+        console.error('Sequence Generation Error:', error);
+        return { success: false, error: error.message };
     }
+}
 
 /**
  * Save a generated sequence to the sequence.json file
  * @param {object[]} sequence - The sequence to save
  */
 function saveSequence(sequence) {
-        try {
-            fs.writeFileSync(SEQUENCE_FILE, JSON.stringify(sequence, null, 2));
-            return { success: true };
-        } catch (error) {
-            return { success: false, error: error.message };
-        }
+    try {
+        fs.writeFileSync(SEQUENCE_FILE, JSON.stringify(sequence, null, 2));
+        return { success: true };
+    } catch (error) {
+        return { success: false, error: error.message };
     }
+}
 
-    /**
-     * Generate personalization suggestions for a lead
-     * @param {object} lead - Lead data
-     * @returns {Promise<object>}
-     */
-    async function generatePersonalizationSuggestions(lead) {
-        const prompt = `Analyze this lead and suggest 5 personalization hooks for outreach:
+/**
+ * Generate personalization suggestions for a lead
+ * @param {object} lead - Lead data
+ * @returns {Promise<object>}
+ */
+async function generatePersonalizationSuggestions(lead) {
+    const prompt = `Analyze this lead and suggest 5 personalization hooks for outreach:
 
 Lead Data:
 - Name: ${lead.name || 'Unknown'}
@@ -124,59 +124,58 @@ Return JSON with:
   "avoid": ["things to avoid mentioning"]
 }`;
 
-        try {
-            try {
-                return await callSmartModel({
-                    prompt: prompt,
-                    systemPrompt: 'You are a sales strategist. Return only valid JSON.',
-                    complexity: 'low',
-                    outputFormat: 'json',
-                    temperature: 0.6
-                });
-            } catch (error) {
-                console.error('Personalization Error:', error);
-                return { hooks: [], error: error.message };
-            }
+    try {
+        return await callSmartModel({
+            prompt: prompt,
+            systemPrompt: 'You are a sales strategist. Return only valid JSON.',
+            complexity: 'low',
+            outputFormat: 'json',
+            temperature: 0.6
+        });
+    } catch (error) {
+        console.error('Personalization Error:', error);
+        return { hooks: [], error: error.message };
+    }
+}
+
+/**
+ * Auto-draft a message for a specific channel and lead
+ * NOW WITH FULL CONVERSATION CONTEXT
+ * @param {object} lead - Lead data (or leadId)
+ * @param {string} channel - SMS, EMAIL, LINKEDIN
+ * @param {string} context - Additional context (previous messages, etc.)
+ * @returns {Promise<string>}
+ */
+
+async function autoDraftMessage(lead, channel, context = '') {
+    const charLimits = {
+        SMS: 160,
+        EMAIL: 500,
+        LINKEDIN: 300
+    };
+
+    // Get full conversation context
+    let fullContext = context;
+    let extractedDetails = {};
+
+    try {
+        const { generateContextPrompt, buildContextForAI } = require('./conversationMemory');
+        // detailExtractor is not directly used here but loaded in memory?
+        // const { getExtractedDetails } = require('./detailExtractor');
+
+        const leadId = lead.id || lead;
+        const contextData = await buildContextForAI(leadId);
+
+        if (contextData) {
+            fullContext = await generateContextPrompt(leadId);
+            extractedDetails = contextData.extractedDetails || {};
         }
+    } catch (err) {
+        console.log('[AI Draft] Context loading error (non-fatal):', err.message);
+    }
 
-    /**
-     * Auto-draft a message for a specific channel and lead
-     * NOW WITH FULL CONVERSATION CONTEXT
-     * @param {object} lead - Lead data (or leadId)
-     * @param {string} channel - SMS, EMAIL, LINKEDIN
-     * @param {string} context - Additional context (previous messages, etc.)
-     * @returns {Promise<string>}
-     */
-
-    async function autoDraftMessage(lead, channel, context = '') {
-            const charLimits = {
-                SMS: 160,
-                EMAIL: 500,
-                LINKEDIN: 300
-            };
-
-            // Get full conversation context
-            let fullContext = context;
-            let extractedDetails = {};
-
-            try {
-                const { generateContextPrompt, buildContextForAI } = require('./conversationMemory');
-                // detailExtractor is not directly used here but loaded in memory?
-                // const { getExtractedDetails } = require('./detailExtractor');
-
-                const leadId = lead.id || lead;
-                const contextData = await buildContextForAI(leadId);
-
-                if (contextData) {
-                    fullContext = await generateContextPrompt(leadId);
-                    extractedDetails = contextData.extractedDetails || {};
-                }
-            } catch (err) {
-                console.log('[AI Draft] Context loading error (non-fatal):', err.message);
-            }
-
-            // Build enhanced prompt
-            const prompt = `You are drafting a ${channel} message for a sales follow-up.
+    // Build enhanced prompt
+    const prompt = `You are drafting a ${channel} message for a sales follow-up.
 
 ${fullContext}
 
@@ -203,59 +202,59 @@ ${context ? `ADDITIONAL CONTEXT: ${context}` : ''}
 
 Return ONLY the message text. ${channel === 'EMAIL' ? 'Start with "Subject: " on first line.' : ''}`;
 
-            try {
-                const response = await getOpenAI().chat.completions.create({
-                    model: 'gpt-4o-mini',
-                    messages: [
-                        { role: 'system', content: 'You are a skilled sales copywriter who writes like a real person, not a bot. You reference previous conversations naturally.' },
-                        { role: 'user', content: prompt }
-                    ],
-                    temperature: 0.75,
-                    max_tokens: 300
-                });
+    try {
+        const response = await getOpenAI().chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: [
+                { role: 'system', content: 'You are a skilled sales copywriter who writes like a real person, not a bot. You reference previous conversations naturally.' },
+                { role: 'user', content: prompt }
+            ],
+            temperature: 0.75,
+            max_tokens: 300
+        });
 
-                return response.choices[0].message.content.trim();
-            } catch (error) {
-                console.error('Auto-Draft Error:', error);
-                return '';
+        return response.choices[0].message.content.trim();
+    } catch (error) {
+        console.error('Auto-Draft Error:', error);
+        return '';
+    }
+}
+
+/**
+ * Draft a reply to an incoming message with full context
+ * @param {number} leadId - Lead ID
+ * @param {string} incomingMessage - The message they sent
+ * @param {string} channel - SMS or EMAIL
+ */
+async function draftContextualReply(leadId, incomingMessage, channel = 'EMAIL') {
+    try {
+        const { generateContextPrompt } = require('./conversationMemory');
+        const { getExtractedDetails } = require('./detailExtractor');
+        const { query } = require('../db');
+        const researchService = require('./researchService');
+
+        const leadRes = await query('SELECT * FROM leads WHERE id = $1', [leadId]);
+        const lead = leadRes.rows[0];
+        if (!lead) throw new Error('Lead not found');
+
+        const fullContext = await generateContextPrompt(leadId);
+        const details = await getExtractedDetails(leadId);
+
+        // --- NEW: Perform Deep Research if enabled ---
+        let researchContext = '';
+        if (process.env.PERPLEXITY_API_KEY && lead.company) {
+            try {
+                console.log(`[AI Research] researching ${lead.company}...`);
+                const companyResearch = await researchService.researchCompany(lead.company, lead.website);
+                if (companyResearch) {
+                    researchContext = `\nREAL-TIME COMPANY RESEARCH:\n${companyResearch}\n`;
+                }
+            } catch (resErr) {
+                console.warn('[AI Research] failed:', resErr.message);
             }
         }
 
-        /**
-         * Draft a reply to an incoming message with full context
-         * @param {number} leadId - Lead ID
-         * @param {string} incomingMessage - The message they sent
-         * @param {string} channel - SMS or EMAIL
-         */
-        async function draftContextualReply(leadId, incomingMessage, channel = 'EMAIL') {
-            try {
-                const { generateContextPrompt } = require('./conversationMemory');
-                const { getExtractedDetails } = require('./detailExtractor');
-                const { query } = require('../db');
-                const researchService = require('./researchService');
-
-                const leadRes = await query('SELECT * FROM leads WHERE id = $1', [leadId]);
-                const lead = leadRes.rows[0];
-                if (!lead) throw new Error('Lead not found');
-
-                const fullContext = await generateContextPrompt(leadId);
-                const details = await getExtractedDetails(leadId);
-
-                // --- NEW: Perform Deep Research if enabled ---
-                let researchContext = '';
-                if (process.env.PERPLEXITY_API_KEY && lead.company) {
-                    try {
-                        console.log(`[AI Research] researching ${lead.company}...`);
-                        const companyResearch = await researchService.researchCompany(lead.company, lead.website);
-                        if (companyResearch) {
-                            researchContext = `\nREAL-TIME COMPANY RESEARCH:\n${companyResearch}\n`;
-                        }
-                    } catch (resErr) {
-                        console.warn('[AI Research] failed:', resErr.message);
-                    }
-                }
-
-                const prompt = `You are responding to a customer message. Be helpful, reference their question, and guide toward a call.
+        const prompt = `You are responding to a customer message. Be helpful, reference their question, and guide toward a call.
 
 THEIR MESSAGE:
 "${incomingMessage}"
@@ -276,48 +275,48 @@ REQUIREMENTS:
 
 Write the response now:`;
 
-                const response = await getOpenAI().chat.completions.create({
-                    model: 'gpt-4o',
-                    messages: [
-                        { role: 'system', content: 'You are a helpful sales representative having a real conversation. Be natural, not salesy.' },
-                        { role: 'user', content: prompt }
-                    ],
-                    temperature: 0.7,
-                    max_tokens: 400
-                });
+        const response = await getOpenAI().chat.completions.create({
+            model: 'gpt-4o',
+            messages: [
+                { role: 'system', content: 'You are a helpful sales representative having a real conversation. Be natural, not salesy.' },
+                { role: 'user', content: prompt }
+            ],
+            temperature: 0.7,
+            max_tokens: 400
+        });
 
-                return {
-                    success: true,
-                    draft: response.choices[0].message.content.trim(),
-                    channel,
-                    leadId
-                };
-            } catch (error) {
-                console.error('Contextual Reply Error:', error);
-                return { success: false, error: error.message };
-            }
+        return {
+            success: true,
+            draft: response.choices[0].message.content.trim(),
+            channel,
+            leadId
+        };
+    } catch (error) {
+        console.error('Contextual Reply Error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+/**
+ * Adapt a sequence template based on lead context
+ * @param {string} templateContent - Original template
+ * @param {number} leadId - Lead ID
+ * @param {string} channel - Channel type
+ */
+async function adaptSequenceMessage(templateContent, leadId, channel) {
+    try {
+        const { generateContextPrompt, buildContextForAI } = require('./conversationMemory');
+
+        const context = await buildContextForAI(leadId);
+
+        // If no context/replies, just use template with variable replacement
+        if (!context || !context.hasReplied) {
+            return { adapted: false, content: templateContent };
         }
 
-        /**
-         * Adapt a sequence template based on lead context
-         * @param {string} templateContent - Original template
-         * @param {number} leadId - Lead ID
-         * @param {string} channel - Channel type
-         */
-        async function adaptSequenceMessage(templateContent, leadId, channel) {
-            try {
-                const { generateContextPrompt, buildContextForAI } = require('./conversationMemory');
+        const fullContext = await generateContextPrompt(leadId);
 
-                const context = await buildContextForAI(leadId);
-
-                // If no context/replies, just use template with variable replacement
-                if (!context || !context.hasReplied) {
-                    return { adapted: false, content: templateContent };
-                }
-
-                const fullContext = await generateContextPrompt(leadId);
-
-                const prompt = `Adapt this sales template to be contextual based on previous conversations.
+        const prompt = `Adapt this sales template to be contextual based on previous conversations.
 
 ORIGINAL TEMPLATE:
 "${templateContent}"
@@ -333,33 +332,33 @@ REQUIREMENTS:
 
 Return ONLY the adapted message:`;
 
-                const response = await getOpenAI().chat.completions.create({
-                    model: 'gpt-4o-mini',
-                    messages: [
-                        { role: 'system', content: 'You adapt sales templates to be contextual. Keep the essence but personalize.' },
-                        { role: 'user', content: prompt }
-                    ],
-                    temperature: 0.65,
-                    max_tokens: 350
-                });
+        const response = await getOpenAI().chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: [
+                { role: 'system', content: 'You adapt sales templates to be contextual. Keep the essence but personalize.' },
+                { role: 'user', content: prompt }
+            ],
+            temperature: 0.65,
+            max_tokens: 350
+        });
 
-                return {
-                    adapted: true,
-                    content: response.choices[0].message.content.trim(),
-                    originalTemplate: templateContent
-                };
-            } catch (error) {
-                console.error('Adapt Message Error:', error);
-                return { adapted: false, content: templateContent, error: error.message };
-            }
-        }
-
-        module.exports = {
-            generateSequence,
-            saveSequence,
-            generatePersonalizationSuggestions,
-            autoDraftMessage,
-            draftContextualReply,
-            adaptSequenceMessage
+        return {
+            adapted: true,
+            content: response.choices[0].message.content.trim(),
+            originalTemplate: templateContent
         };
+    } catch (error) {
+        console.error('Adapt Message Error:', error);
+        return { adapted: false, content: templateContent, error: error.message };
+    }
+}
+
+module.exports = {
+    generateSequence,
+    saveSequence,
+    generatePersonalizationSuggestions,
+    autoDraftMessage,
+    draftContextualReply,
+    adaptSequenceMessage
+};
 

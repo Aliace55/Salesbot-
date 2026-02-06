@@ -2124,4 +2124,14 @@ app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
 });
 
+// Global Error Handlers to prevent crash
+process.on('uncaughtException', (err) => {
+    console.error('[CRITICAL] Uncaught Exception:', err);
+    // process.exit(1); // Keep alive if possible? Or let container restart.
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[CRITICAL] Unhandled Rejection:', reason);
+});
+
 module.exports = { app };

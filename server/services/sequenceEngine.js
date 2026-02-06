@@ -65,7 +65,8 @@ function wrapLinks(text, leadId) {
     return text.replace(/(https?:\/\/[^\s]+)/g, (url) => {
         if (url.includes('/api/track/click')) return url;
         const encodedUrl = encodeURIComponent(url);
-        return `http://localhost:3000/api/track/click?leadId=${leadId}&url=${encodedUrl}`;
+        const apiUrl = process.env.API_URL || 'http://localhost:3000';
+        return `${apiUrl}/api/track/click?leadId=${leadId}&url=${encodedUrl}`;
     });
 }
 
@@ -334,7 +335,7 @@ async function processLead(lead, steps) {
 </div>`;
 
             // Append Tracking Pixel & Signature
-            const trackingUrl = `http://localhost:3000/api/track/pixel/${lead.id}`;
+            const trackingUrl = `${process.env.API_URL || 'http://localhost:3000'}/api/track/pixel/${lead.id}`;
             const emailBody = trackedBody + EMAIL_SIGNATURE + `<br><img src="${trackingUrl}" alt="" width="1" height="1" style="display:none;" />`;
 
             result = await sendEmail(lead.email, subject, emailBody);
@@ -369,4 +370,4 @@ async function processLead(lead, steps) {
     }
 }
 
-module.exports = { runSequence, getSequence, SEQUENCE_FILE };
+module.exports = { runSequence, SEQUENCE_FILE };
