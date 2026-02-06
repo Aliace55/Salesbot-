@@ -130,20 +130,32 @@ async function syncInboundLeads() {
         );
 
         if (res.rows.length === 0) {
-            // Insert New Inbound
-            await query(`
-                INSERT INTO leads (
-                    name, phone, email, source, status, lead_type,
-                    sheet_row_id, sheet_tab, last_synced_at
-                ) VALUES ($1, $2, $3, $4, 'NEW', 'INBOUND', $5, 'Inbound', NOW())
-            `, [
-                lead.name, lead.phone, lead.email, lead.source || 'Inbound Sheet',
-                sheetRowId
-            ]);
-            newCount++;
+            // Check for existing lead by email to prevent duplicates (if pushed via Webhook first)
+            let existingId = null;
+            if (lead.email) {
+                const dupCheck = await query("SELECT id FROM leads WHERE email = $1", [lead.email]);
+                if (dupCheck.rows.length > 0) existingId = dupCheck.rows[0].id;
+            }
 
-            // Trigger AI Trigger or Brain?
-            // Maybe notify pipeline? 
+            if (existingId) {
+                // Link existing webhook lead to this sheet row
+                await query(
+                    "UPDATE leads SET sheet_row_id = $1, sheet_tab = 'Inbound' WHERE id = $2",
+                    [sheetRowId, existingId]
+                );
+            } else {
+                // Insert New Inbound
+                await query(`
+                    INSERT INTO leads (
+                        name, phone, email, source, status, lead_type,
+                        sheet_row_id, sheet_tab, last_synced_at
+                    ) VALUES ($1, $2, $3, $4, 'NEW', 'INBOUND', $5, 'Inbound', NOW())
+                `, [
+                    lead.name, lead.phone, lead.email, lead.source || 'Inbound Sheet',
+                    sheetRowId
+                ]);
+                newCount++;
+            }
         }
     }
     console.log(`[SheetSync] Inbound: ${newCount} new leads.`);
