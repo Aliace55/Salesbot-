@@ -378,6 +378,19 @@ export default function Contacts() {
                                 title: `Follow up with ${selectedContact.name}`
                             }}
                         />
+
+                        {/* Merge Contact Modal */}
+                        <MergeContactModal
+                            isOpen={showMergeModal}
+                            onClose={() => setShowMergeModal(false)}
+                            sourceContact={selectedContact}
+                            onMergeSuccess={() => {
+                                toast.success("Contact merged successfully");
+                                setSelectedContact(null);
+                                setShowDetailPanel(false);
+                                fetchContacts();
+                            }}
+                        />
                     </>
                 )}
             </div>
