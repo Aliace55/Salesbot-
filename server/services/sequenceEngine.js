@@ -281,9 +281,23 @@ async function processLead(lead, steps) {
             const subject = fillTemplate(stepConfig.subject, lead);
             const trackedBody = wrapLinks(filledContent, lead.id).replace(/\n/g, '<br>');
 
-            // Append Tracking Pixel
+            const EMAIL_SIGNATURE = `
+<br>
+<div style="font-family: Arial, sans-serif; color: #333; margin-top: 20px; border-top: 1px solid #eee; padding-top: 20px;">
+    <p style="margin: 0; font-size: 16px;"><strong>Jeff Lach</strong> | Account Manager</p>
+    <p style="margin: 5px 0 0 0; font-size: 14px;">Phone: (864) 860-1011</p>
+    <p style="margin: 5px 0 0 0; font-size: 14px;">Website: <a href="https://trackmytruck.us" style="color: #007bff; text-decoration: none;">TrackMyTruck.us</a></p>
+    <div style="margin-top: 15px;">
+        <a href="https://calendar.app.google/bK9U7hCN8N7Cvoxb7" style="background-color: #007bff; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px; display: inline-block;">Schedule a Meeting</a>
+    </div>
+    <div style="margin-top: 15px;">
+        <img src="https://www.dropbox.com/scl/fi/0sldjieg0gwtty783thxo/Track-My-Truck-Banner-Cropped.png?rlkey=gz10bp9o6yej42gzjnjo0ptku&st=ae92ubei&dl=1" alt="Track My Truck" width="200" style="display: block;">
+    </div>
+</div>`;
+
+            // Append Tracking Pixel & Signature
             const trackingUrl = `http://localhost:3000/api/track/pixel/${lead.id}`;
-            const emailBody = trackedBody + `<br><img src="${trackingUrl}" alt="" width="1" height="1" style="display:none;" />`;
+            const emailBody = trackedBody + EMAIL_SIGNATURE + `<br><img src="${trackingUrl}" alt="" width="1" height="1" style="display:none;" />`;
 
             result = await sendEmail(lead.email, subject, emailBody);
         }
