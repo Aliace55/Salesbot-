@@ -9,7 +9,7 @@
  */
 
 const { query } = require('../db');
-const { callOpenAI } = require('./openaiHandler');
+const { callSmartModel } = require('./modelSelector');
 
 // Keys we want to extract from conversations
 const EXTRACTION_KEYS = [
@@ -58,52 +58,60 @@ Extract any of these details if mentioned (return null if not found):
 Return ONLY a JSON object with the extracted values. Use null for anything not found.
 Example: {"fleet_size": "50 trucks", "current_vendor": "Samsara", "decision_timeline": null, ...}`;
 
-        const response = await callOpenAI(prompt, {
-            temperature: 0.3,
-            max_tokens: 500
+        const response = await callSmartModel({
+            prompt: prompt,
+            systemPrompt: 'You are a data extraction assistant. Return ONLY JSON.',
+            complexity: 'low',
+            outputFormat: 'json',
+            temperature: 0.3
         });
 
         // Parse the response
-        let extracted = {};
-        try {
-            // Clean up response - remove markdown code blocks if present
-            let cleanResponse = response.trim();
-            if (cleanResponse.startsWith('```')) {
-                cleanResponse = cleanResponse.replace(/```json?\n?/g, '').replace(/```/g, '');
-            }
-            extracted = JSON.parse(cleanResponse);
-        } catch (parseErr) {
-            console.error('[DetailExtractor] Failed to parse AI response:', response);
-            return { success: false, error: 'Parse error' };
-        }
+        // Parse the response (modelSelector handles JSON parsing logic)
+        let extracted = response;
 
-        // Save non-null values to database
-        let savedCount = 0;
-        for (const [key, value] of Object.entries(extracted)) {
-            if (value !== null && value !== undefined && value !== '') {
-                await saveExtractedDetail(leadId, key, value, 'AI_EXTRACTION');
-                savedCount++;
+        // If response is raw string (fallback), try to parse
+        if (typeof extracted === 'string') {
+            try {
+                let clean = extracted.replace(/```json/g, '').replace(/```/g, '').trim();
+                extracted = JSON.parse(clean);
+            } catch (e) {
+                console.error('[DetailExtractor] Parse error:', e);
+                extracted = {};
             }
         }
-
-        // Check for objections and update lead
-        if (extracted.objections) {
-            await query('UPDATE leads SET last_objection = $1 WHERE id = $2', [extracted.objections, leadId]);
-        }
-
-        // Check for buying signals
-        const buyingSignals = detectBuyingSignals(messageContent);
-        if (buyingSignals.length > 0) {
-            await query('UPDATE leads SET buying_signals = $1 WHERE id = $2', [buyingSignals.join(', '), leadId]);
-        }
-
-        console.log(`[DetailExtractor] Extracted ${savedCount} details for lead ${leadId}`);
-        return { success: true, extracted, savedCount };
-
-    } catch (err) {
-        console.error('[DetailExtractor] Error:', err.message);
-        return { success: false, error: err.message };
+    } catch (parseErr) {
+        console.error('[DetailExtractor] Failed to parse AI response:', response);
+        return { success: false, error: 'Parse error' };
     }
+
+    // Save non-null values to database
+    let savedCount = 0;
+    for (const [key, value] of Object.entries(extracted)) {
+        if (value !== null && value !== undefined && value !== '') {
+            await saveExtractedDetail(leadId, key, value, 'AI_EXTRACTION');
+            savedCount++;
+        }
+    }
+
+    // Check for objections and update lead
+    if (extracted.objections) {
+        await query('UPDATE leads SET last_objection = $1 WHERE id = $2', [extracted.objections, leadId]);
+    }
+
+    // Check for buying signals
+    const buyingSignals = detectBuyingSignals(messageContent);
+    if (buyingSignals.length > 0) {
+        await query('UPDATE leads SET buying_signals = $1 WHERE id = $2', [buyingSignals.join(', '), leadId]);
+    }
+
+    console.log(`[DetailExtractor] Extracted ${savedCount} details for lead ${leadId}`);
+    return { success: true, extracted, savedCount };
+
+} catch (err) {
+    console.error('[DetailExtractor] Error:', err.message);
+    return { success: false, error: err.message };
+}
 }
 
 /**
@@ -279,7 +287,12 @@ async function processIncomingMessage(leadId, messageContent) {
 
                 const summaryPrompt = `Summarize this sales conversation in 2-3 sentences. Focus on: customer's needs, objections, and where they are in the buying process.\n\nCONVERSATION:\n${conversationText}`;
 
-                const summary = await callOpenAI(summaryPrompt, { max_tokens: 200 });
+                const summary = await callSmartModel({
+                    prompt: summaryPrompt,
+                    complexity: 'low',
+                    outputFormat: 'text',
+                    temperature: 0.5
+                });
                 await query('UPDATE leads SET conversation_summary = $1 WHERE id = $2', [summary, leadId]);
             }
         } catch (summaryErr) {

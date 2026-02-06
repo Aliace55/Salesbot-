@@ -1,7 +1,7 @@
 const fetch = require('node-fetch');
 
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
-const MODEL = 'llama-3.1-sonar-large-128k-online'; // Online capabilities
+const MODEL = 'sonar-pro'; // Latest online model
 
 /**
  * Research a company to find recent news, pain points, and strategic direction.
@@ -43,7 +43,8 @@ async function researchCompany(companyName, domain) {
         });
 
         if (!response.ok) {
-            throw new Error(`Perplexity API Error: ${response.statusText}`);
+            const errorBody = await response.text();
+            throw new Error(`Perplexity API Error: ${response.status} ${response.statusText} - ${errorBody}`);
         }
 
         const data = await response.json();

@@ -107,25 +107,136 @@ app.post('/api/sync', async (req, res) => {
     }
 });
 
-// Get Sequence Config (from JSON)
-const { getSequence, SEQUENCE_FILE } = require('./services/sequenceEngine');
-const fs = require('fs');
+// === GOOGLE SHEETS SYNC ===
+const { runFullSync } = require('./services/sheetSync');
 
-app.get('/api/sequence', (req, res) => {
-    res.json(getSequence());
+// Manual Trigger
+app.post('/api/sync/sheets', async (req, res) => {
+    console.log('Manual Sheet Sync Triggered');
+    const result = await runFullSync();
+    res.json(result);
 });
 
-app.post('/api/sequence', (req, res) => {
+// Sync Status
+app.get('/api/sync/status', async (req, res) => {
     try {
-        const newSequence = req.body; // Array of steps
-        if (!Array.isArray(newSequence)) throw new Error('Invalid Format');
-
-        fs.writeFileSync(SEQUENCE_FILE, JSON.stringify(newSequence, null, 2));
-        res.json({ success: true, sequence: newSequence });
+        const result = await query('SELECT MAX(last_synced_at) as last_sync FROM leads');
+        res.json({ lastSync: result.rows[0].last_sync });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
+
+// Scheduled Sync (Every 5 Minutes)
+const SYNC_INTERVAL_MS = 5 * 60 * 1000;
+setInterval(() => {
+    console.log('[Scheduler] Running scheduled sheet sync...');
+    runFullSync().catch(err => console.error('[Scheduler] Sync failed:', err));
+}, SYNC_INTERVAL_MS);
+
+// === CAMPAIGN MANAGEMENT (sequences) ===
+
+// Get All Sequences (Campaigns)
+app.get('/api/sequences', async (req, res) => {
+    try {
+        const { lead_type } = req.query;
+        let sql = 'SELECT * FROM sequences';
+        const params = [];
+
+        if (lead_type) {
+            sql += ' WHERE lead_type = $1';
+            params.push(lead_type);
+        }
+
+        sql += ' ORDER BY created_at DESC';
+
+        const result = await query(sql, params);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get Single Sequence
+app.get('/api/sequences/:id', async (req, res) => {
+    try {
+        const result = await query('SELECT * FROM sequences WHERE id = $1', [req.params.id]);
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Not Found' });
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Create Sequence
+app.post('/api/sequences', async (req, res) => {
+    try {
+        const { name, lead_type, description, steps } = req.body;
+        const result = await query(`
+            INSERT INTO sequences (name, lead_type, description, steps, is_active)
+            VALUES ($1, $2, $3, $4, 1)
+            RETURNING *
+        `, [name, lead_type || 'OUTBOUND', description, JSON.stringify(steps || [])]);
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Update Sequence
+app.put('/api/sequences/:id', async (req, res) => {
+    try {
+        const { name, description, steps, is_active } = req.body;
+
+        // Dynamic update
+        const updates = [];
+        const values = [];
+        let idx = 1;
+
+        if (name !== undefined) { updates.push(`name = $${idx++}`); values.push(name); }
+        if (description !== undefined) { updates.push(`description = $${idx++}`); values.push(description); }
+        if (steps !== undefined) { updates.push(`steps = $${idx++}`); values.push(JSON.stringify(steps)); }
+        if (is_active !== undefined) { updates.push(`is_active = $${idx++}`); values.push(is_active); }
+
+        values.push(req.params.id);
+
+        const result = await query(`
+            UPDATE sequences SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $${idx} RETURNING *
+        `, values);
+
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Delete Sequence
+app.delete('/api/sequences/:id', async (req, res) => {
+    try {
+        await query('DELETE FROM sequences WHERE id = $1', [req.params.id]);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// AI Generate Sequence (Mock/Stub for now, or use real AI)
+app.post('/api/ai/generate-sequence', async (req, res) => {
+    try {
+        const { industry, product, steps, leadType } = req.body;
+        // In a real app, call GPT-4 here. For now, use a template.
+        const generated = [
+            { id: 1, type: 'SMS', delayDays: 0, content: `Hey {{firstName}}, saw you're in ${industry}. Are you using ${product}?` },
+            { id: 2, type: 'EMAIL', delayDays: 1, subject: `${product} for ${industry}`, content: `Hi {{firstName}},\n\nWanted to share how ${product} helps ${industry} companies.\n\nBest,\nJeff` },
+            { id: 3, type: 'CALL', delayDays: 2, description: 'Follow up call' }
+        ];
+        res.json({ success: true, sequence: generated });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 
 
 // --- DEEP RESEARCH API (Perplexity) ---
@@ -279,7 +390,22 @@ app.post('/api/leads', async (req, res) => {
             RETURNING id
         `, [name || 'Unknown', cleanPhone, email || null, product_interest || null, source || 'Manual', company || null, campaign || null, finalLeadType, finalLeadSource, isHot]);
 
-        res.json({ success: true, leadId: result.rows[0].id, leadType: finalLeadType, leadSource: finalLeadSource });
+        const newLeadId = result.rows[0].id;
+
+        // Trigger Research
+        if (company) {
+            const { researchCompany } = require('./services/researchService');
+            researchCompany(company, null).then(async (summary) => {
+                if (summary) {
+                    try {
+                        await query("UPDATE leads SET research_summary = $1 WHERE id = $2", [summary, newLeadId]);
+                        console.log(`[Research] Completed for: ${company}`);
+                    } catch (e) { console.error(e); }
+                }
+            }).catch(e => console.error(e));
+        }
+
+        res.json({ success: true, leadId: newLeadId, leadType: finalLeadType, leadSource: finalLeadSource });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });

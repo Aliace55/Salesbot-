@@ -56,6 +56,7 @@ const initDB = async () => {
         revenue TEXT,
         timezone TEXT,
         company_id INTEGER,
+        campaign_id INTEGER, -- Campaign FK
         funnel_stage TEXT DEFAULT 'LEAD',
         stage_changed_at TIMESTAMP,
         ai_confidence INTEGER,
@@ -63,9 +64,21 @@ const initDB = async () => {
         last_ai_reason TEXT,
         lead_type TEXT DEFAULT 'OUTBOUND',
         lead_source TEXT,
-        is_hot INTEGER DEFAULT 0
+        is_hot INTEGER DEFAULT 0,
+        -- Google Sheets Sync
+        sheet_row_id INTEGER,
+        sheet_tab TEXT,
+        last_synced_at TIMESTAMP,
+        research_summary TEXT
       );
     `);
+
+    // Add columns if they don't exist (Migration)
+    await query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS sheet_row_id INTEGER;`);
+    await query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS sheet_tab TEXT;`);
+    await query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMP;`);
+    await query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS research_summary TEXT;`);
+    await query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS campaign_id INTEGER;`); // Add campaign_id migration
 
     await query(`
       CREATE TABLE IF NOT EXISTS messages (
@@ -143,10 +156,13 @@ const initDB = async () => {
         country TEXT,
         phone TEXT,
         notes TEXT,
+        research_summary TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    await query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS research_summary TEXT;`);
 
     await query(`
       CREATE TABLE IF NOT EXISTS sequences (
@@ -154,12 +170,22 @@ const initDB = async () => {
         name TEXT NOT NULL,
         lead_type TEXT DEFAULT 'OUTBOUND',
         description TEXT,
-        steps TEXT,
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        lead_type TEXT DEFAULT 'OUTBOUND',
+        description TEXT,
+        steps JSONB DEFAULT '[]',
+        stats JSONB DEFAULT '{}',
         is_active INTEGER DEFAULT 1,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // Migration for Sequences
+    await query(`ALTER TABLE sequences ADD COLUMN IF NOT EXISTS stats JSONB DEFAULT '{}';`);
+    // Note: If steps was TEXT, we might need a migration, but for now we assume fresh or empty.
+    // await query(`ALTER TABLE sequences ALTER COLUMN steps TYPE JSONB USING steps::jsonb;`);
 
     await query(`
       CREATE TABLE IF NOT EXISTS stage_history (

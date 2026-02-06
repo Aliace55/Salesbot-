@@ -1,4 +1,4 @@
-const fs = require('fs');
+// fs removed
 const path = require('path');
 const { query } = require('../db');
 const { fetchLeadsFromSheet } = require('./googleSheets');
@@ -11,16 +11,8 @@ const { processIncomingMessage } = require('./detailExtractor');
 
 const SEQUENCE_FILE = path.join(__dirname, '../sequence.json');
 
-// Helper: Get Sequence
-function getSequence() {
-    try {
-        const data = fs.readFileSync(SEQUENCE_FILE, 'utf8');
-        return JSON.parse(data);
-    } catch (err) {
-        console.error('Error reading sequence.json:', err);
-        return [];
-    }
-}
+// Helper: Get Sequence (Deprecated - using DB now)
+// function getSequence() { ... }
 
 // Helper: Fill Variables (The "Smart Engine")
 function fillTemplate(template, lead) {
@@ -165,11 +157,48 @@ async function checkCondition(condition, lead, steps) {
     return true;
 }
 
+// Helper: Get Steps for a Lead's Campaign
+async function getLeadSteps(lead) {
+    try {
+        let steps = [];
+        // 1. Try to get specific campaign
+        if (lead.campaign_id) {
+            const res = await query('SELECT steps FROM sequences WHERE id = $1', [lead.campaign_id]);
+            if (res.rows.length > 0) {
+                // Ensure steps is array (DB returns JSONB object/array)
+                // Postgres pg library parses JSONB automatically to object/array
+                steps = res.rows[0].steps;
+            }
+        }
+
+        // 2. Fallback to Default (First Active Sequence of same type)
+        if (!steps || steps.length === 0) {
+            // Determine type from lead or default to OUTBOUND
+            const type = lead.lead_type || 'OUTBOUND';
+            const res = await query(`
+                SELECT steps FROM sequences 
+                WHERE lead_type = $1 AND is_active = 1 
+                ORDER BY created_at ASC LIMIT 1
+            `, [type]);
+
+            if (res.rows.length > 0) {
+                steps = res.rows[0].steps;
+            }
+        }
+
+        // Return parsed steps or empty array
+        return Array.isArray(steps) ? steps : [];
+    } catch (err) {
+        console.error(`Error fetching steps for lead ${lead.id}:`, err);
+        return [];
+    }
+}
+
 async function runSequence() {
     console.log('--- Starting Sequence Run ---');
-    const steps = getSequence();
+    // REMOVED: const steps = getSequence(); (We now fetch per lead)
 
-    // 1. Sync Leads
+    // 1. Sync Leads (Keep existing logic)
     const sheetLeads = await fetchLeadsFromSheet();
     console.log(`Debug: Fetched ${sheetLeads.length} leads from service.`);
 
@@ -183,11 +212,14 @@ async function runSequence() {
 
             // Try insert
             try {
+                // Determine Campaign ID? For now default is NULL (will pick default)
+                // Or we could match based on sheet tab name if we wanted.
+
                 const res = await query(`
-                    INSERT INTO leads (name, phone, email, product_interest, status, step, created_at)
-                    VALUES ($1, $2, $3, $4, 'NEW', 0, CURRENT_TIMESTAMP)
+                    INSERT INTO leads (name, phone, email, product_interest, status, step, created_at, lead_type)
+                    VALUES ($1, $2, $3, $4, 'NEW', 0, CURRENT_TIMESTAMP, $5)
                     ON CONFLICT (phone) DO NOTHING
-                `, [lead.name, formattedPhone, lead.email, lead.product_interest]);
+                `, [lead.name, formattedPhone, lead.email, lead.product_interest, lead.type || 'OUTBOUND']);
 
                 if (res.rowCount > 0) newCount++;
             } catch (err) {
@@ -203,7 +235,13 @@ async function runSequence() {
     const leads = leadsRes.rows;
 
     for (const lead of leads) {
-        await processLead(lead, steps);
+        // FETCH STEPS DYNAMICALLY
+        const steps = await getLeadSteps(lead);
+        if (steps.length > 0) {
+            await processLead(lead, steps);
+        } else {
+            // console.log(`No active sequence found for lead ${lead.id}`);
+        }
     }
 }
 

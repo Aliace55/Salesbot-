@@ -57,7 +57,7 @@ export default function DashboardLayout() {
         {
             title: 'Engagement',
             items: [
-                { path: '/campaigns', label: 'Sequences', icon: Zap, badge: 'AI', description: 'Automated outreach' },
+                { path: '/campaigns', label: 'Campaigns', icon: Zap, badge: 'AI', description: 'Automated outreach' },
                 { path: '/tasks', label: 'Tasks', icon: CheckSquare, badge: null, description: 'To-dos & follow-ups' },
                 { path: '/inbox', label: 'Inbox', icon: MessageSquare, badge: null, description: 'All conversations' },
             ]
