@@ -13,7 +13,9 @@ import { useToast } from '../components/ToastProvider';
 import { CRMTable } from '../components/crm/CRMTable';
 import { ActivityTimeline } from '../components/crm/ActivityTimeline';
 import { EditableProperty } from '../components/crm/EditableProperty';
+import { EditableProperty } from '../components/crm/EditableProperty';
 import { TaskModal } from '../components/crm/TaskModal';
+import { MergeContactModal } from '../components/crm/MergeContactModal';
 
 // ========== CONFIGURATION ==========
 const DEFAULT_COLUMNS = [
@@ -54,6 +56,7 @@ export default function Contacts() {
     const [showAddModal, setShowAddModal] = useState(false);
     const [newContact, setNewContact] = useState({});
     const [showActionsMenu, setShowActionsMenu] = useState(false);
+    const [showMergeModal, setShowMergeModal] = useState(false);
 
     useEffect(() => {
         fetchContacts();
@@ -101,6 +104,10 @@ export default function Contacts() {
     const closeDetailPanel = () => {
         setShowDetailPanel(false);
         setSelectedContact(null);
+    };
+
+    const handleMergeContact = () => {
+        setShowMergeModal(true);
     };
 
     const handleSort = (colId) => {
