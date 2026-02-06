@@ -227,7 +227,7 @@ export default function DashboardLayout() {
             {/* Main Content */}
             <div className="flex-1 flex flex-col overflow-hidden">
                 {/* Top Bar */}
-                <header className="h-14 bg-[#111827]/80 backdrop-blur-xl border-b border-slate-700/50 flex items-center justify-between px-6">
+                <header className="relative z-50 h-14 bg-[#111827]/80 backdrop-blur-xl border-b border-slate-700/50 flex items-center justify-between px-6">
                     <div className="flex items-center space-x-4">
                         {/* Breadcrumb */}
                         <div className="flex items-center text-sm">
