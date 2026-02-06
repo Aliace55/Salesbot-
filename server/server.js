@@ -373,6 +373,8 @@ app.post('/api/leads', async (req, res) => {
             return res.status(400).json({ error: 'Phone or email is required' });
         }
 
+        console.log(`[Lead Capture] Incoming Lead from ${source || 'Unknown'} (${name})`);
+
         // Normalize phone
         let cleanPhone = null;
         if (phone) {
