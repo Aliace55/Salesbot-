@@ -14,30 +14,34 @@ import Agenda from './pages/Agenda';
 import CommandCenter from './pages/CommandCenter';
 import { ToastProvider } from './components/ToastProvider';
 
+import { ErrorBoundary } from './components/ErrorBoundary';
+
 function App() {
   return (
     <BrowserRouter>
-      <ToastProvider>
-        <Routes>
-          <Route path="/" element={<DashboardLayout />}>
-            <Route index element={<Pipeline />} />
-            <Route path="brain" element={<CommandCenter />} />
-            <Route path="agenda" element={<Agenda />} />
-            <Route path="companies" element={<Companies />} />
-            <Route path="contacts" element={<Contacts />} />
-            <Route path="campaigns" element={<Campaigns />} />
-            <Route path="tasks" element={<Tasks />} />
-            <Route path="inbox" element={<Inbox />} />
-            <Route path="analytics" element={<Analytics />} />
-            <Route path="settings" element={<Settings />} />
+      <ErrorBoundary>
+        <ToastProvider>
+          <Routes>
+            <Route path="/" element={<DashboardLayout />}>
+              <Route index element={<Pipeline />} />
+              <Route path="brain" element={<CommandCenter />} />
+              <Route path="agenda" element={<Agenda />} />
+              <Route path="companies" element={<Companies />} />
+              <Route path="contacts" element={<Contacts />} />
+              <Route path="campaigns" element={<Campaigns />} />
+              <Route path="tasks" element={<Tasks />} />
+              <Route path="inbox" element={<Inbox />} />
+              <Route path="analytics" element={<Analytics />} />
+              <Route path="settings" element={<Settings />} />
 
-            {/* Redirects for legacy/alternate routes */}
-            <Route path="leads" element={<Navigate to="/contacts" replace />} />
-            <Route path="reports" element={<Navigate to="/analytics" replace />} />
-            <Route path="pipeline" element={<Navigate to="/" replace />} />
-          </Route>
-        </Routes>
-      </ToastProvider>
+              {/* Redirects for legacy/alternate routes */}
+              <Route path="leads" element={<Navigate to="/contacts" replace />} />
+              <Route path="reports" element={<Navigate to="/analytics" replace />} />
+              <Route path="pipeline" element={<Navigate to="/" replace />} />
+            </Route>
+          </Routes>
+        </ToastProvider>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }
