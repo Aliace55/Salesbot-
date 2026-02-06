@@ -112,6 +112,20 @@ export default function Companies() {
         }
     };
 
+    // Filtering Logic
+    const filteredCompanies = companies.filter(company => {
+        // Industry Filter
+        if (filterIndustry !== 'All Industries' && company.industry !== filterIndustry) return false;
+
+        // Revenue Filter (Mock logic)
+        // if (filterRevenue !== 'Any') return false; 
+
+        // City Filter
+        if (filterCity && !company.city?.toLowerCase().includes(filterCity.toLowerCase())) return false;
+
+        return true;
+    });
+
     return (
         <div className="flex h-[calc(100vh-80px)] overflow-hidden">
             {/* Main Content Area */}
