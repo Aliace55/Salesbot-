@@ -400,6 +400,24 @@ app.post('/api/leads', async (req, res) => {
 
         const newLeadId = result.rows[0].id;
 
+        // Push to Google Sheet "Inbound" Tab (Concurrent backup)
+        try {
+            const { writeLeadToSheet } = require('./services/googleSheets');
+            // We construct the lead object for the sheet
+            const leadForSheet = {
+                name: name || 'Unknown',
+                phone: cleanPhone || phone,
+                email: email,
+                company: company,
+                status: 'NEW',
+                source: source || 'Webhook'
+            };
+            // Fire and forget (don't block response)
+            writeLeadToSheet(leadForSheet, 'Inbound').catch(e => console.error('[Sheet Write] Failed:', e));
+        } catch (e) {
+            console.error('[Sheet Write] Error:', e);
+        }
+
         // Trigger Research
         if (company) {
             const { researchCompany } = require('./services/researchService');
