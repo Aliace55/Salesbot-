@@ -45,7 +45,10 @@ export function ActivityTimeline({ activities = [], onCreateNote, onCreateTask, 
                         <div className="p-2 bg-purple-500/20 rounded-full text-purple-400"><Phone size={18} /></div>
                         <span className="text-sm font-medium">Call</span>
                     </button>
-                    <button className="flex items-center space-x-2 text-slate-300 hover:text-white transition-colors">
+                    <button
+                        onClick={() => onCreateTask && onCreateTask()}
+                        className="flex items-center space-x-2 text-slate-300 hover:text-white transition-colors"
+                    >
                         <div className="p-2 bg-green-500/20 rounded-full text-green-400"><CheckCircle size={18} /></div>
                         <span className="text-sm font-medium">Task</span>
                     </button>
@@ -73,8 +76,8 @@ export function ActivityTimeline({ activities = [], onCreateNote, onCreateTask, 
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
                         className={`text-xs font-medium py-2 border-b-2 transition-colors whitespace-nowrap ${activeTab === tab.id
-                                ? 'text-blue-400 border-blue-500'
-                                : 'text-slate-500 border-transparent hover:text-slate-300'
+                            ? 'text-blue-400 border-blue-500'
+                            : 'text-slate-500 border-transparent hover:text-slate-300'
                             }`}
                     >
                         {tab.label}

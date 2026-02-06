@@ -8,6 +8,8 @@ import {
 import { format, addDays, startOfWeek, endOfWeek, eachDayOfInterval, isSameDay, isToday } from 'date-fns';
 import { useToast } from '../components/ToastProvider';
 
+import { TaskModal } from '../components/crm/TaskModal';
+
 export default function Agenda() {
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [viewMode, setViewMode] = useState('both'); // 'meetings', 'tasks', 'both'
@@ -22,7 +24,6 @@ export default function Agenda() {
     // Modal State
     const [showTaskModal, setShowTaskModal] = useState(false);
     const [editingTask, setEditingTask] = useState(null);
-    const [newTask, setNewTask] = useState({ title: '', type: 'TASK', due_date: format(new Date(), 'yyyy-MM-dd'), lead_id: null });
 
     useEffect(() => {
         fetchData();
@@ -60,19 +61,17 @@ export default function Agenda() {
         }
     };
 
-    const handleCreateTask = async (e) => {
-        e.preventDefault();
+    const handleCreateTask = async (taskData) => {
         try {
             if (editingTask) {
-                await axios.put(`/api/tasks/${editingTask.id}`, newTask);
+                await axios.put(`/api/tasks/${editingTask.id}`, taskData);
                 toast.success("Task updated");
             } else {
-                await axios.post('/api/tasks', newTask);
+                await axios.post('/api/tasks', taskData);
                 toast.success("Task created");
             }
             setShowTaskModal(false);
             setEditingTask(null);
-            setNewTask({ title: '', type: 'TASK', due_date: format(new Date(), 'yyyy-MM-dd'), lead_id: null });
             fetchData();
         } catch (err) {
             console.error(err);
@@ -106,12 +105,6 @@ export default function Agenda() {
 
     const openEditModal = (task) => {
         setEditingTask(task);
-        setNewTask({
-            title: task.title,
-            type: task.type,
-            due_date: task.due_date ? format(new Date(task.due_date), 'yyyy-MM-dd') : '',
-            lead_id: task.lead_id
-        });
         setShowTaskModal(true);
     };
 
@@ -146,7 +139,6 @@ export default function Agenda() {
                         <button
                             onClick={() => {
                                 setEditingTask(null);
-                                setNewTask({ title: '', type: 'TASK', due_date: format(new Date(), 'yyyy-MM-dd') });
                                 setShowTaskModal(true);
                             }}
                             className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-medium shadow-lg shadow-blue-500/20 transition-all"
@@ -286,56 +278,12 @@ export default function Agenda() {
             </div>
 
             {/* Create/Edit Task Modal */}
-            {showTaskModal && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
-                    <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl w-[400px] shadow-2xl">
-                        <div className="flex justify-between items-center mb-4">
-                            <h3 className="text-lg font-bold text-white">{editingTask ? 'Edit Task' : 'New Task'}</h3>
-                            <button onClick={() => setShowTaskModal(false)}><X className="text-slate-400 hover:text-white" /></button>
-                        </div>
-                        <form onSubmit={handleCreateTask} className="space-y-4">
-                            <div>
-                                <label className="block text-xs font-medium text-slate-500 mb-1">Title</label>
-                                <input
-                                    type="text"
-                                    required
-                                    value={newTask.title}
-                                    onChange={e => setNewTask({ ...newTask, title: e.target.value })}
-                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-sm text-white focus:ring-2 focus:ring-blue-500"
-                                    placeholder="e.g. Call Client X"
-                                />
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-xs font-medium text-slate-500 mb-1">Type</label>
-                                    <select
-                                        value={newTask.type}
-                                        onChange={e => setNewTask({ ...newTask, type: e.target.value })}
-                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-sm text-white"
-                                    >
-                                        <option value="TASK">Task</option>
-                                        <option value="CALL">Call</option>
-                                        <option value="EMAIL">Email</option>
-                                        <option value="LINKEDIN">LinkedIn</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-slate-500 mb-1">Due Date</label>
-                                    <input
-                                        type="date"
-                                        value={newTask.due_date}
-                                        onChange={e => setNewTask({ ...newTask, due_date: e.target.value })}
-                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-sm text-white"
-                                    />
-                                </div>
-                            </div>
-                            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-2 rounded-lg">
-                                {editingTask ? 'Save Changes' : 'Create Task'}
-                            </button>
-                        </form>
-                    </div>
-                </div>
-            )}
+            <TaskModal
+                isOpen={showTaskModal}
+                onClose={() => setShowTaskModal(false)}
+                onSave={handleCreateTask}
+                task={editingTask}
+            />
         </div>
     );
 }

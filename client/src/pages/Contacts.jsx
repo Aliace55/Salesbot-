@@ -13,6 +13,7 @@ import { useToast } from '../components/ToastProvider';
 import { CRMTable } from '../components/crm/CRMTable';
 import { ActivityTimeline } from '../components/crm/ActivityTimeline';
 import { EditableProperty } from '../components/crm/EditableProperty';
+import { TaskModal } from '../components/crm/TaskModal';
 
 // ========== CONFIGURATION ==========
 const DEFAULT_COLUMNS = [
@@ -44,7 +45,9 @@ export default function Contacts() {
     const [selectedContact, setSelectedContact] = useState(null);
     const [showDetailPanel, setShowDetailPanel] = useState(false);
     const [activity, setActivity] = useState([]);
-    const [loadingActivity, setLoadingActivity] = useState(false);
+
+    // Task Modal State
+    const [showTaskModal, setShowTaskModal] = useState(false);
 
     // Modals
     const [showAddModal, setShowAddModal] = useState(false);
@@ -280,12 +283,24 @@ export default function Contacts() {
                             {/* Center Content (Timeline) */}
                             <div className="flex-1 bg-slate-900">
                                 <ActivityTimeline
-                                    activities={activity}
+                                    entities={activity}
                                     onCreateNote={handleCreateNote}
+                                    onCreateTask={() => setShowTaskModal(true)}
                                     entityType="contact"
                                 />
                             </div>
                         </div>
+
+                        {/* Task Modal for Contact */}
+                        <TaskModal
+                            isOpen={showTaskModal}
+                            onClose={() => setShowTaskModal(false)}
+                            onSave={handleCreateTask}
+                            defaults={{
+                                lead_id: selectedContact.id,
+                                title: `Follow up with ${selectedContact.name}`
+                            }}
+                        />
                     </>
                 )}
             </div>
