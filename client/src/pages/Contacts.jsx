@@ -4,7 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
 import {
     Search, Filter, Plus, Download, Upload, MoreHorizontal, Edit2, Trash2,
-    Phone, Mail, Linkedin, Globe, MapPin, Building, User, Tag, Star,
+    Phone, Mail, Linkedin, Globe, MapPin, Building, Building2, User, Tag, Star,
     ChevronDown, X, Check, Eye, RefreshCw, SlidersHorizontal, ArrowUpDown,
     MessageSquare, Users, Briefcase, Hash, Calendar, ExternalLink, FileText,
     Clock, CheckCircle, XCircle, AlertCircle, Play, Pause, Send, Layout
