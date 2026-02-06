@@ -1,6 +1,4 @@
-import React, { useEffect, useState } from 'react';
-import axios from 'axios';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
     Search, Filter, Plus, Download, MoreHorizontal, Edit2, Trash2,
     Building2, Globe, MapPin, Phone, Users, ExternalLink, X
@@ -23,6 +21,7 @@ const DEFAULT_COLUMNS = [
 
 export default function Companies() {
     const navigate = useNavigate();
+    const location = useLocation();
     const toast = useToast();
 
     // State
@@ -35,7 +34,7 @@ export default function Companies() {
     const [filterIndustry, setFilterIndustry] = useState('All Industries');
     const [filterRevenue, setFilterRevenue] = useState('Any');
     const [filterCity, setFilterCity] = useState('');
-    const [searchQuery, setSearchQuery] = useState('');
+    const [searchQuery, setSearchQuery] = useState(location.state?.searchQuery || '');
 
     // Detail View State
     const [selectedCompany, setSelectedCompany] = useState(null);
