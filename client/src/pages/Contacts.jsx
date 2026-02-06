@@ -144,6 +144,22 @@ export default function Contacts() {
         }
     };
 
+    // Task Management
+    const handleCreateTask = async (taskData) => {
+        try {
+            await axios.post('/api/tasks', {
+                ...taskData,
+                lead_id: selectedContact.id // Force association
+            });
+            toast.success("Task assigned to contact");
+            setShowTaskModal(false);
+            fetchActivity(selectedContact.id); // Refresh timeline
+        } catch (err) {
+            console.error(err);
+            toast.error("Failed to create task");
+        }
+    };
+
     // Filter Logic
     const filteredContacts = contacts.sort((a, b) => {
         const aVal = a[sortBy] || '';
