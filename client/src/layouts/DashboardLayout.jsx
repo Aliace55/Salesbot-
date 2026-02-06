@@ -268,7 +268,7 @@ export default function DashboardLayout() {
 
                             {/* Notifications Dropdown */}
                             {showNotifications && (
-                                <div className="absolute right-0 mt-2 w-80 bg-[#1e293b] border border-slate-700 rounded-xl shadow-2xl overflow-hidden z-50">
+                                <div className="absolute right-0 mt-2 w-80 bg-[#1e293b] border border-slate-700 rounded-xl shadow-2xl overflow-hidden z-[100]">
                                     <div className="px-4 py-3 border-b border-slate-700/50 flex justify-between items-center bg-[#111827]">
                                         <h3 className="font-semibold text-white text-sm">Notifications</h3>
                                         <span className="text-xs text-slate-500">{notifications.length} New</span>
