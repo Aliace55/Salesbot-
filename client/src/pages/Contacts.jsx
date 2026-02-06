@@ -13,7 +13,6 @@ import { useToast } from '../components/ToastProvider';
 import { CRMTable } from '../components/crm/CRMTable';
 import { ActivityTimeline } from '../components/crm/ActivityTimeline';
 import { EditableProperty } from '../components/crm/EditableProperty';
-import { EditableProperty } from '../components/crm/EditableProperty';
 import { TaskModal } from '../components/crm/TaskModal';
 import { MergeContactModal } from '../components/crm/MergeContactModal';
 
