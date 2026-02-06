@@ -385,7 +385,10 @@ app.post('/api/leads', async (req, res) => {
         }
 
         // Send Notification Email
-        if (source && ['Google Ads', 'Facebook', 'Website', 'Google', 'Facebook Ads'].includes(source)) {
+        const normalizedSource = source ? source.toLowerCase() : '';
+        const validSources = ['google ads', 'facebook', 'website', 'google', 'facebook ads'];
+
+        if (validSources.includes(normalizedSource)) {
             const { sendEmail } = require('./services/emailHandler');
             const alertHtml = `
                 <h2>New Lead Capture 🚀</h2>
