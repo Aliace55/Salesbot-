@@ -384,6 +384,24 @@ app.post('/api/leads', async (req, res) => {
             else cleanPhone = phone;
         }
 
+        // Send Notification Email
+        if (source && ['Google Ads', 'Facebook', 'Website', 'Google', 'Facebook Ads'].includes(source)) {
+            const { sendEmail } = require('./services/emailHandler');
+            const alertHtml = `
+                <h2>New Lead Capture 🚀</h2>
+                <p><strong>Name:</strong> ${name}</p>
+                <p><strong>Phone:</strong> ${cleanPhone || phone}</p>
+                <p><strong>Email:</strong> ${email}</p>
+                <p><strong>Source:</strong> ${source}</p>
+                <p><strong>Company:</strong> ${company || 'N/A'}</p>
+                <br>
+                <p><em>Lead has been added to the CRM and assigned to 'NEW' status.</em></p>
+            `;
+            // Fire and forget email
+            sendEmail('jeff.lach@trackmytruck.us', `New Lead: ${name} (${source})`, alertHtml)
+                .catch(e => console.error('[Email Alert] Failed:', e));
+        }
+
         // Auto-detect lead type if not provided
         const leadTypeDetector = require('./services/leadTypeDetector');
         const detected = leadTypeDetector.detectLeadType(source, campaign);
