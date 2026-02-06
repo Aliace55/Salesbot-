@@ -385,14 +385,31 @@ app.post('/api/leads', async (req, res) => {
         }
 
         // Send Notification Email
-        const normalizedSource = source ? source.toLowerCase() : 'unknown';
-        // Expanded list + partial matching
-        const validSources = ['google', 'facebook', 'website', 'web', 'form', 'contact', 'ad', 'ads', 'unknown'];
-        const isValidSource = validSources.some(s => normalizedSource.includes(s));
+        // Send Notification Email (UNCONDITIONAL)
+        console.log(`[Email Alert] Attempting to send to jeff.lach@trackmytruck.us for lead: ${name}`);
 
-        if (isValidSource || !source) {
+        try {
             const { sendEmail } = require('./services/emailHandler');
             const alertHtml = `
+                <h2>New Lead Capture 🚀</h2>
+                <p><strong>Name:</strong> ${name}</p>
+                <p><strong>Phone:</strong> ${cleanPhone || phone}</p>
+                <p><strong>Email:</strong> ${email}</p>
+                <p><strong>Source:</strong> ${source || 'Unknown'}</p>
+                <p><strong>Company:</strong> ${company || 'N/A'}</p>
+                <br>
+                <p><em>Lead has been added to the CRM and assigned to 'NEW' status.</em></p>
+            `;
+
+            // Send and log result
+            sendEmail('jeff.lach@trackmytruck.us', `New Lead: ${name} (${source || 'Unknown'})`, alertHtml)
+                .then(res => console.log(`[Email Alert] Result: ${JSON.stringify(res)}`))
+                .catch(e => console.error('[Email Alert] Failed:', e));
+        } catch (err) {
+            console.error('[Email Alert] Setup Error:', err);
+        }
+        const { sendEmail } = require('./services/emailHandler');
+        const alertHtml = `
                 <h2>New Lead Capture 🚀</h2>
                 <p><strong>Name:</strong> ${name}</p>
                 <p><strong>Phone:</strong> ${cleanPhone || phone}</p>
@@ -402,63 +419,63 @@ app.post('/api/leads', async (req, res) => {
                 <br>
                 <p><em>Lead has been added to the CRM and assigned to 'NEW' status.</em></p>
             `;
-            // Fire and forget email
-            sendEmail('jeff.lach@trackmytruck.us', `New Lead: ${name} (${source})`, alertHtml)
-                .catch(e => console.error('[Email Alert] Failed:', e));
-        }
+        // Fire and forget email
+        sendEmail('jeff.lach@trackmytruck.us', `New Lead: ${name} (${source})`, alertHtml)
+            .catch(e => console.error('[Email Alert] Failed:', e));
+    }
 
         // Auto-detect lead type if not provided
         const leadTypeDetector = require('./services/leadTypeDetector');
-        const detected = leadTypeDetector.detectLeadType(source, campaign);
+    const detected = leadTypeDetector.detectLeadType(source, campaign);
 
-        const finalLeadType = lead_type || detected.leadType;
-        const finalLeadSource = lead_source || detected.leadSource;
-        const isHot = finalLeadType === 'INBOUND' ? 1 : 0;
+    const finalLeadType = lead_type || detected.leadType;
+    const finalLeadSource = lead_source || detected.leadSource;
+    const isHot = finalLeadType === 'INBOUND' ? 1 : 0;
 
-        const result = await query(`
+    const result = await query(`
             INSERT INTO leads (name, phone, email, product_interest, source, company, campaign, status, step, lead_type, lead_source, is_hot, funnel_stage)
             VALUES ($1, $2, $3, $4, $5, $6, $7, 'NEW', 0, $8, $9, $10, 'LEAD')
             RETURNING id
         `, [name || 'Unknown', cleanPhone, email || null, product_interest || null, source || 'Manual', company || null, campaign || null, finalLeadType, finalLeadSource, isHot]);
 
-        const newLeadId = result.rows[0].id;
+    const newLeadId = result.rows[0].id;
 
-        // Push to Google Sheet "Inbound" Tab (Concurrent backup)
-        try {
-            const { writeLeadToSheet } = require('./services/googleSheets');
-            // We construct the lead object for the sheet
-            const leadForSheet = {
-                name: name || 'Unknown',
-                phone: cleanPhone || phone,
-                email: email,
-                company: company,
-                status: 'NEW',
-                source: source || 'Webhook'
-            };
-            // Fire and forget (don't block response)
-            writeLeadToSheet(leadForSheet, 'Inbound').catch(e => console.error('[Sheet Write] Failed:', e));
-        } catch (e) {
-            console.error('[Sheet Write] Error:', e);
-        }
-
-        // Trigger Research
-        if (company) {
-            const { researchCompany } = require('./services/researchService');
-            researchCompany(company, null).then(async (summary) => {
-                if (summary) {
-                    try {
-                        await query("UPDATE leads SET research_summary = $1 WHERE id = $2", [summary, newLeadId]);
-                        console.log(`[Research] Completed for: ${company}`);
-                    } catch (e) { console.error(e); }
-                }
-            }).catch(e => console.error(e));
-        }
-
-        res.json({ success: true, leadId: newLeadId, leadType: finalLeadType, leadSource: finalLeadSource });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: err.message });
+    // Push to Google Sheet "Inbound" Tab (Concurrent backup)
+    try {
+        const { writeLeadToSheet } = require('./services/googleSheets');
+        // We construct the lead object for the sheet
+        const leadForSheet = {
+            name: name || 'Unknown',
+            phone: cleanPhone || phone,
+            email: email,
+            company: company,
+            status: 'NEW',
+            source: source || 'Webhook'
+        };
+        // Fire and forget (don't block response)
+        writeLeadToSheet(leadForSheet, 'Inbound').catch(e => console.error('[Sheet Write] Failed:', e));
+    } catch (e) {
+        console.error('[Sheet Write] Error:', e);
     }
+
+    // Trigger Research
+    if (company) {
+        const { researchCompany } = require('./services/researchService');
+        researchCompany(company, null).then(async (summary) => {
+            if (summary) {
+                try {
+                    await query("UPDATE leads SET research_summary = $1 WHERE id = $2", [summary, newLeadId]);
+                    console.log(`[Research] Completed for: ${company}`);
+                } catch (e) { console.error(e); }
+            }
+        }).catch(e => console.error(e));
+    }
+
+    res.json({ success: true, leadId: newLeadId, leadType: finalLeadType, leadSource: finalLeadSource });
+} catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+}
 });
 
 // Delete Lead
