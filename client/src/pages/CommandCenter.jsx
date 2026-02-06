@@ -55,7 +55,7 @@ const CommandCenter = () => {
     const handleManualSync = async () => {
         setLoading(true);
         try {
-            await fetch(`${API_BASE_URL}/api/sync/sheets`, { method: 'POST' });
+            await fetch(`${API_BASE_URL}/api/sync`, { method: 'POST' });
             fetchFeed(); // Refresh immediately
         } catch (err) {
             console.error(err);
