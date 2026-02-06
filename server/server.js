@@ -482,6 +482,33 @@ app.put('/api/contacts/:id', async (req, res) => {
     }
 });
 
+// Merge Contacts
+app.post('/api/contacts/merge', async (req, res) => {
+    const { sourceId, targetId } = req.body;
+    if (!sourceId || !targetId) return res.status(400).json({ error: 'Source and Target IDs required' });
+
+    try {
+        await query('BEGIN');
+
+        // Reassign all related records (messages, events, tasks)
+        // We need to check if tables exist or just assume standard schema.
+        // Based on previous reads, these tables exist.
+        await query('UPDATE messages SET lead_id = $1 WHERE lead_id = $2', [targetId, sourceId]);
+        await query('UPDATE tasks SET lead_id = $1 WHERE lead_id = $2', [targetId, sourceId]);
+        await query('UPDATE events SET lead_id = $1 WHERE lead_id = $2', [targetId, sourceId]);
+
+        // Delete the source lead
+        await query('DELETE FROM leads WHERE id = $1', [sourceId]);
+
+        await query('COMMIT');
+        res.json({ success: true });
+    } catch (err) {
+        await query('ROLLBACK');
+        console.error('Merge Error:', err);
+        res.status(500).json({ error: 'Failed to merge contacts' });
+    }
+});
+
 // === CSV IMPORT ===
 app.post('/api/import/csv', async (req, res) => {
     try {
