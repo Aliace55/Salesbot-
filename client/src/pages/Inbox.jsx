@@ -172,7 +172,11 @@ export default function Inbox() {
             toast.info('No LinkedIn URL for this contact');
             return;
         }
-        window.open(activeLead.linkedin_url, '_blank');
+        let url = activeLead.linkedin_url;
+        if (!/^https?:\/\//i.test(url)) {
+            url = 'https://' + url;
+        }
+        window.open(url, '_blank');
     };
 
     const toggleStar = (leadId) => {
